@@ -1,0 +1,13 @@
+PixelShift.o: PixelShift.cpp ../third/CImg-2.3.3/CImg.h \
+ ../third/aquila/aquila/global.h ../third/aquila/aquila/functions.h \
+ ../third/aquila/aquila/global.h \
+ ../third/aquila/aquila/transform/FftFactory.h \
+ ../third/aquila/aquila/transform/../global.h \
+ ../third/aquila/aquila/transform/Fft.h \
+ ../third/aquila/aquila/source/FramesCollection.h \
+ ../third/aquila/aquila/source/../global.h \
+ ../third/aquila/aquila/source/Frame.h \
+ ../third/aquila/aquila/source/SignalSource.h \
+ ../third/aquila/aquila/tools/TextPlot.h \
+ ../third/aquila/aquila/tools/../global.h \
+ ../third/aquila/aquila/tools/../source/SignalSource.h
