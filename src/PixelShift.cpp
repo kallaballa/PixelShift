@@ -2,11 +2,12 @@
 #include <string>
 #include <vector>
 #include <cassert>
-#include <sndfile.hh>
 #include <cmath>
-#include <chrono>
-#include <stdlib.h>
-#include <time.h>
+#include <cstdlib>
+#include <ctime>
+
+#include <sndfile.hh>
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -20,7 +21,6 @@
 
 using namespace cv;
 using std::vector;
-using std::chrono::microseconds;
 
 typedef unsigned char sample_t;
 
@@ -49,61 +49,72 @@ uint8_t lerp(double factor, uint8_t a, uint8_t b) {
 	return factor*a + (1.0 - factor)*b;
 }
 
-void render(const std::vector<double>& absSpectrum, Mat& img, const size_t& i) {
-		Mat frame = img.clone();
-		Mat hsvImg;
-		cvtColor(img, hsvImg, CV_RGB2HSV);
+void render(const std::vector<double>& absSpectrum, Mat& source,
+		const size_t& iteration, const size_t& dampen, const size_t& tweens, const bool& randomizeDir) {
+	std::vector<Mat> tweenVec(tweens);
+	Mat hsvImg;
+	cvtColor(source, hsvImg, CV_RGB2HSV);
 
-		uint8_t rot = rand() % 255;
+	uint8_t rot = 0;
+	if(randomizeDir)
+		rot = rand() % 255;
 
-	for (int h = 0; h < img.rows; h++) {
-			for (int w = 0; w < img.cols; w++) {
-				auto& vec = img.at<Vec3b>(h,w);
-				auto& vech = hsvImg.at<Vec3b>(h,w);
-				uint16_t hue = (((uint16_t)vech[0]) + rot) % 255;
+	for (size_t t = 0; t < tweens; ++t) {
+		Mat& tween = tweenVec[t];
+		tween = source.clone();
+		for (int h = 0; h < source.rows; h++) {
+			for (int w = 0; w < source.cols; w++) {
+				auto& vec = source.at<Vec3b>(h, w);
+				auto& vech = hsvImg.at<Vec3b>(h, w);
+				uint16_t hue = (((uint16_t) vech[0]) + rot) % 255;
 				assert(hue <= 255);
-				vech[0] = (((hue + rot) % 255) / 64) * 64;
-				vech[2] = (vech[2] / 64) * 64;
+				vech[0] = (((uint8_t) hue) / 32) * 32;
+				vech[2] = (vech[2] / 32) * 32;
 
-				double hsvradian = ((double)vech[2] / 255.0) * 2.0 * M_PI;
+				uint8_t mod = vech[2];
+				double hsvradian = ((double) mod / 255.0) * 2.0 * M_PI;
 				double vx = cos(hsvradian);
-		    double vy = sin(hsvradian);
+				double vy = sin(hsvradian);
 
-		    double x = w + (((vx * vech[2]) * absSpectrum[vech[2] % 4]) / 30);
-		    double y = h + (((vy * vech[2]) * absSpectrum[vech[2] % 4]) / 30);
+				double x = w + ((((vx * mod) * absSpectrum[mod % 8]) / dampen) / (t + 1));
+				double y = h + ((((vy * mod) * absSpectrum[mod % 8]) / dampen) / (t + 1));
 
-		    if(x >= 0 && y >= 0 && x < frame.cols && y < frame.rows) {
-		    	auto& vecf = frame.at<Vec3b>(y,x);
-		    	vecf[0] = vec[0];
-		    	vecf[1] = vec[1];
-		    	vecf[2] = vec[2];
+				if (x >= 0 && y >= 0 && x < tween.cols && y < tween.rows) {
+					auto& vect = tween.at<Vec3b>(y, x);
+					vect[0] = vec[0];
+					vect[1] = vec[1];
+					vect[2] = vec[2];
 				}
 			}
 		}
+	}
 
-		Mat blur;
-		GaussianBlur(frame,blur, {0,0}, 1, 1);
+	std::vector<Mat> blurVec(tweens);
+	for(size_t i = 0; i < tweens; ++i) {
+		GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
+	}
 
-		double factor = 0.5;
-		for (int h = 0; h < img.rows; h++) {
-			for (int w = 0; w < img.cols; w++) {
-	    	auto& vec = img.at<Vec3b>(h,w);
-	    	auto& vecb = blur.at<Vec3b>(h,w);
-				auto& vecf = frame.at<Vec3b>(h,w);
+	Mat frame = source.clone();
+	double factor = 1.0/tweens;
+	for(size_t i = 0; i < tweens; ++i) {
+		for (int h = 0; h < source.rows; h++) {
+			for (int w = 0; w < source.cols; w++) {
+				auto& vecb = blurVec[i].at<Vec3b>(h, w);
+				auto& vecf = frame.at<Vec3b>(h, w);
 
-				vecf[0] = lerp(factor, vecb[0], vec[0]);
-				vecf[1] = lerp(factor, vecb[1], vec[1]);
-				vecf[2] = lerp(factor, vecb[2], vec[2]);
+				vecf[0] = lerp(factor, vecb[0], vecf[0]);
+				vecf[1] = lerp(factor, vecb[1], vecf[1]);
+				vecf[2] = lerp(factor, vecb[2], vecf[2]);
 			}
 		}
-
-		std::string zeroes = "000000000";
-		std::string num = std::to_string(i + 1);
-		num = zeroes.substr(0, zeroes.length() - num.length()) + num;
-		imwrite("frame" + num + ".jpg", frame);
+	}
+	std::string zeroes = "000000000";
+	std::string num = std::to_string(iteration + 1);
+	num = zeroes.substr(0, zeroes.length() - num.length()) + num;
+	imwrite("frame" + num + ".jpg", frame);
 }
 
-void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps) {
+void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps, size_t dampen, size_t tweens, bool randomizeDir) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -134,7 +145,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps) {
 				absSpectrum[k] = std::abs(spectrum[k]);
 			}
 
-			render(absSpectrum, frame, i);
+			render(absSpectrum, frame, i, dampen, tweens, randomizeDir);
 		}
 	}
 }
@@ -145,7 +156,7 @@ int main(int argc, char** argv) {
   VideoCapture capture(argv[2]);
   if( !capture.isOpened() )
       throw "Error when reading " + std::string(argv[2]);
-	pixelShift(capture, sndfile, 25);
+	pixelShift(capture, sndfile, 25, 20, 3, true);
 
 	return 0;
 }

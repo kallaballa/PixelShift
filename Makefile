@@ -1,5 +1,5 @@
 CXX      := g++-5
-CXXFLAGS := -fopenmp -pthread -fno-strict-aliasing -std=c++1y -pedantic -Wall -I../third/CImg-2.3.3 -I../third/aquila `pkg-config --cflags opencv libpng sndfile samplerate`
+CXXFLAGS := -fopenmp -pthread -fno-strict-aliasing -std=c++1y -pedantic -Wall -I../third/aquila `pkg-config --cflags opencv libpng sndfile samplerate`
 LDFLAGS  := -fopenmp -L/opt/local/lib -L../third/aquila/ -L../third/aquila/lib
 LIBS     := -lm -lpthread -lX11 -lpthread -lAquila -lOoura_fft `pkg-config --libs opencv libpng sndfile samplerate`
 .PHONY: all release debian-release info debug clean debian-clean distclean 
