@@ -60,7 +60,7 @@ void render(const std::vector<double>& absSpectrum, Mat& img, const size_t& i) {
 			for (int w = 0; w < img.cols; w++) {
 				auto& vec = img.at<Vec3b>(h,w);
 				auto& vech = hsvImg.at<Vec3b>(h,w);
-				uint16_t hue = (((uint16_t)vech[0]));
+				uint16_t hue = (((uint16_t)vech[0]) + rot) % 255;
 				assert(hue <= 255);
 				vech[0] = (((hue + rot) % 255) / 64) * 64;
 				vech[2] = (vech[2] / 64) * 64;
@@ -69,8 +69,8 @@ void render(const std::vector<double>& absSpectrum, Mat& img, const size_t& i) {
 				double vx = cos(hsvradian);
 		    double vy = sin(hsvradian);
 
-		    double x = w + (((vx * vech[2]) * absSpectrum[vech[2] % 4]) / 100);
-		    double y = h + (((vy * vech[2]) * absSpectrum[vech[2] % 4]) / 100);
+		    double x = w + (((vx * vech[2]) * absSpectrum[vech[2] % 4]) / 30);
+		    double y = h + (((vy * vech[2]) * absSpectrum[vech[2] % 4]) / 30);
 
 		    if(x >= 0 && y >= 0 && x < frame.cols && y < frame.rows) {
 		    	auto& vecf = frame.at<Vec3b>(y,x);
@@ -81,10 +81,8 @@ void render(const std::vector<double>& absSpectrum, Mat& img, const size_t& i) {
 			}
 		}
 
-		Mat blur = frame;
-
+		Mat blur;
 		GaussianBlur(frame,blur, {0,0}, 1, 1);
-		unsigned char *blurInput = (unsigned char*)(blur.data);
 
 		double factor = 0.5;
 		for (int h = 0; h < img.rows; h++) {
@@ -115,8 +113,6 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps) {
 	const std::size_t SIZE = round((double) samplingRate / (double) fps);
 
 	SignalSource in(data, samplingRate);
-	FrequencyType sampleFreq = samplingRate;
-
 	FramesCollection frames(in, SIZE);
 	SpectrumType filterSpectrum(SIZE);
 	auto signalFFT = FftFactory::getFft(16);
@@ -132,7 +128,6 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps) {
 
 		if (success) {
 			SpectrumType spectrum = signalFFT->fft(frames.frame(j).toArray());
-
 			std::size_t halfLength = spectrum.size() / 2;
 			std::vector<double> absSpectrum(halfLength);
 			for (std::size_t k = 0; k < halfLength; ++k) {
