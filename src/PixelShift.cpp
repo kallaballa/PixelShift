@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
       ("sat,s", "Use the saturation of the picture to steer the effect")
       ("val,v", "Use the value of the picture to steer the effect")
       ("rand,r", "Randomize the direction of the effect")
-			("help,h", "Produce help message");
+			("help", "Produce help message");
 
   po::options_description hidden("Hidden options");
   hidden.add_options()("audioFile", po::value<string>(&audioFile), "audioFile");
