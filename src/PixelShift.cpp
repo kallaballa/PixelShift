@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
   VideoCapture capture(videoFile);
   double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
   double height = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
-  VideoWriter output(outputVideo,CV_FOURCC('F','F','V','1'),fps, Size(width,height));
+  VideoWriter output(outputVideo,CV_FOURCC('H','2','6','4'),fps, Size(width,height));
 
   if( !capture.isOpened() )
       throw "Error when reading " + std::string(argv[2]);
