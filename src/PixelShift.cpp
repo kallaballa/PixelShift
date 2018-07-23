@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
   }
 
 
-	SndfileHandle sndfile(audioFile);
+  SndfileHandle sndfile(audioFile);
   VideoCapture capture(videoFile);
   double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
   double height = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
