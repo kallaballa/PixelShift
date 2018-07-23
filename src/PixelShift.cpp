@@ -235,7 +235,7 @@ int main(int argc, char** argv) {
 			Size(width, height));
 
 	if (!capture.isOpened())
-		throw "Error when reading " + std::string(argv[2]);
+		throw "Error when reading " + videoFile;
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
 			randomizeDir);
