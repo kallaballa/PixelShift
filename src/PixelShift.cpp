@@ -222,6 +222,7 @@ int main(int argc, char** argv) {
 
   if( !capture.isOpened() )
       throw "Error when reading " + std::string(argv[2]);
+
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component, randomizeDir);
 	capture.release();
 	output.release();
