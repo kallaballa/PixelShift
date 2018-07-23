@@ -27,38 +27,39 @@ namespace po = boost::program_options;
 typedef unsigned char sample_t;
 
 double mix_channels(vector<double>& buffer) {
-  double avg = 0;
-  for(double& d: buffer) {
-    avg += d;
-  }
-  avg /= buffer.size();
+	double avg = 0;
+	for (double& d : buffer) {
+		avg += d;
+	}
+	avg /= buffer.size();
 
-  return avg;
+	return avg;
 }
 
 std::vector<double> read_fully(SndfileHandle& file, size_t channels) {
-  std::vector<double> data;
-  vector<double> buffer(channels);
+	std::vector<double> data;
+	vector<double> buffer(channels);
 
-  while (file.read(buffer.data(), channels) > 0) {
-    data.push_back(mix_channels(buffer));
-  }
+	while (file.read(buffer.data(), channels) > 0) {
+		data.push_back(mix_channels(buffer));
+	}
 
-  return data;
+	return data;
 }
 
 uint8_t lerp(double factor, uint8_t a, uint8_t b) {
-	return factor*a + (1.0 - factor)*b;
+	return factor * a + (1.0 - factor) * b;
 }
 
-void render(VideoWriter& output, const std::vector<double>& absSpectrum, Mat& source,
-		const size_t& iteration, const double& boost, const size_t& tweens, const size_t& component, const bool& randomizeDir) {
+void render(VideoWriter& output, const std::vector<double>& absSpectrum,
+		Mat& source, const size_t& iteration, const double& boost,
+		const size_t& tweens, const size_t& component, const bool& randomizeDir) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
 	cvtColor(source, hsvImg, CV_RGB2HSV);
 
 	uint8_t rot = 0;
-	if(randomizeDir)
+	if (randomizeDir)
 		rot = rand() % 255;
 
 	for (size_t t = 0; t < tweens; ++t) {
@@ -78,8 +79,10 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum, Mat& so
 				double vx = cos(hsvradian);
 				double vy = sin(hsvradian);
 
-				double x = w + ((((vx * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
-				double y = h + ((((vy * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
+				double x = w
+						+ ((((vx * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
+				double y = h
+						+ ((((vy * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
 
 				if (x >= 0 && y >= 0 && x < tween.cols && y < tween.rows) {
 					auto& vect = tween.at<Vec3b>(y, x);
@@ -92,13 +95,13 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum, Mat& so
 	}
 
 	std::vector<Mat> blurVec(tweens);
-	for(size_t i = 0; i < tweens; ++i) {
+	for (size_t i = 0; i < tweens; ++i) {
 		GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
 	}
 
 	Mat frame = source.clone();
-	double factor = 1.0/tweens;
-	for(size_t i = 0; i < tweens; ++i) {
+	double factor = 1.0 / tweens;
+	for (size_t i = 0; i < tweens; ++i) {
 		for (int h = 0; h < source.rows; h++) {
 			for (int w = 0; w < source.cols; w++) {
 				auto& vecb = blurVec[i].at<Vec3b>(h, w);
@@ -113,7 +116,9 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum, Mat& so
 	output.write(frame);
 }
 
-void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output, size_t fps, double boost, size_t tweens, size_t component, bool randomizeDir) {
+void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
+		size_t fps, double boost, size_t tweens, size_t component,
+		bool randomizeDir) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -144,14 +149,15 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 				absSpectrum[k] = std::abs(spectrum[k]);
 			}
 
-			render(output, absSpectrum, frame, i, boost, tweens, component, randomizeDir);
+			render(output, absSpectrum, frame, i, boost, tweens, component,
+					randomizeDir);
 		}
 	}
 }
 
 int main(int argc, char** argv) {
 	using std::string;
-	srand (time(NULL));
+	srand(time(NULL));
 	string videoFile;
 	string audioFile;
 	string outputVideo = "output.mkv";
@@ -161,69 +167,78 @@ int main(int argc, char** argv) {
 	size_t component = 0;
 	bool randomizeDir = false;
 
-  po::options_description genericDesc("Options");
-  genericDesc.add_options()
-  		("fps,f", po::value<size_t>(&fps)->default_value(fps),"The frame rate of the resulting video")
-      ("boost,b", po::value<double>(&boost)->default_value(boost), "Boost factor for the effect. Higher values boost more and values below 1 dampen")
-      ("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
-      ("output,o", po::value<string>(&outputVideo)->default_value(outputVideo), "The filename of the resulting video")
-			("hue,h", "Use the hue of the picture to steer the effect")
-      ("sat,s", "Use the saturation of the picture to steer the effect")
-      ("val,v", "Use the value of the picture to steer the effect")
-      ("rand,r", "Randomize the direction of the effect")
-			("help", "Produce help message");
+	po::options_description genericDesc("Options");
+	genericDesc.add_options()("fps,f",
+			po::value<size_t>(&fps)->default_value(fps),
+			"The frame rate of the resulting video")("boost,b",
+			po::value<double>(&boost)->default_value(boost),
+			"Boost factor for the effect. Higher values boost more and values below 1 dampen")(
+			"tweens,t", po::value<size_t>(&tweens)->default_value(tweens),
+			"How many in between steps should the effect produce")("output,o",
+			po::value<string>(&outputVideo)->default_value(outputVideo),
+			"The filename of the resulting video")("hue,h",
+			"Use the hue of the picture to steer the effect")("sat,s",
+			"Use the saturation of the picture to steer the effect")("val,v",
+			"Use the value of the picture to steer the effect")("rand,r",
+			"Randomize the direction of the effect")("help", "Produce help message");
 
-  po::options_description hidden("Hidden options");
-  hidden.add_options()("audioFile", po::value<string>(&audioFile), "audioFile");
-  hidden.add_options()("videoFile", po::value<string>(&videoFile), "videoFile");
+	po::options_description hidden("Hidden options");
+	hidden.add_options()("audioFile", po::value<string>(&audioFile), "audioFile");
+	hidden.add_options()("videoFile", po::value<string>(&videoFile), "videoFile");
 
-  po::options_description cmdline_options;
-  cmdline_options.add(genericDesc).add(hidden);
+	po::options_description cmdline_options;
+	cmdline_options.add(genericDesc).add(hidden);
 
-  po::positional_options_description p;
-  p.add("audioFile", 1);
-  p.add("videoFile", 1);
+	po::positional_options_description p;
+	p.add("audioFile", 1);
+	p.add("videoFile", 1);
 
-  po::options_description visible;
-  visible.add(genericDesc);
+	po::options_description visible;
+	visible.add(genericDesc);
 
-  po::variables_map vm;
-  po::store(po::command_line_parser(argc, argv).options(cmdline_options).positional(p).run(), vm);
-  po::notify(vm);
+	po::variables_map vm;
+	po::store(
+			po::command_line_parser(argc, argv).options(cmdline_options).positional(p).run(),
+			vm);
+	po::notify(vm);
 
-  if (vm.count("help") || audioFile.empty() || videoFile.empty()) {
-    std::cerr << "Usage: pixelshift [options] <audioFile> <videoFile>" << std::endl;
-    std::cerr << visible;
-    return 0;
-  }
+	if (vm.count("help") || audioFile.empty() || videoFile.empty()) {
+		std::cerr << "Usage: pixelshift [options] <audioFile> <videoFile>"
+				<< std::endl;
+		std::cerr << visible;
+		return 0;
+	}
 
-  if((vm.count("hue") && vm.count("sat")) || (vm.count("hue") && vm.count("val")) || (vm.count("sat") && vm.count("val"))) {
-  	std::cerr << "Only one of hue, sat or val may be specified" << std::endl;
-  }
+	if ((vm.count("hue") && vm.count("sat"))
+			|| (vm.count("hue") && vm.count("val"))
+			|| (vm.count("sat") && vm.count("val"))) {
+		std::cerr << "Only one of hue, sat or val may be specified" << std::endl;
+	}
 
-  if(vm.count("hue")) {
-  	component = 0;
-  } else if(vm.count("sat")) {
-  	component = 1;
-  } else if(vm.count("val")) {
-  	component = 2;
-  }
+	if (vm.count("hue")) {
+		component = 0;
+	} else if (vm.count("sat")) {
+		component = 1;
+	} else if (vm.count("val")) {
+		component = 2;
+	}
 
-  if(vm.count("rand")) {
-  	randomizeDir = true;
-  }
+	if (vm.count("rand")) {
+		randomizeDir = true;
+	}
 
+	SndfileHandle sndfile(audioFile);
+	VideoCapture capture(videoFile);
+	double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
+	double height = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
+	VideoWriter output(outputVideo, CV_FOURCC('H', '2', '6', '4'), fps,
+			Size(width, height));
 
-  SndfileHandle sndfile(audioFile);
-  VideoCapture capture(videoFile);
-  double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
-  double height = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
-  VideoWriter output(outputVideo,CV_FOURCC('H','2','6','4'),fps, Size(width,height));
-
-	if( !capture.isOpened() )
+	if (!capture.isOpened())
 		throw "Error when reading " + std::string(argv[2]);
 
-	pixelShift(capture, sndfile, output, fps, boost, tweens, component, randomizeDir);
+	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
+			randomizeDir);
 	capture.release();
 	output.release();
 	return 0;
