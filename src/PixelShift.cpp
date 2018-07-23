@@ -220,8 +220,8 @@ int main(int argc, char** argv) {
   double height = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
   VideoWriter output(outputVideo,CV_FOURCC('H','2','6','4'),fps, Size(width,height));
 
-  if( !capture.isOpened() )
-      throw "Error when reading " + std::string(argv[2]);
+	if( !capture.isOpened() )
+		throw "Error when reading " + std::string(argv[2]);
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component, randomizeDir);
 	capture.release();
