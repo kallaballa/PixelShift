@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <ctime>
 
+#include <boost/program_options.hpp>
 #include <sndfile.hh>
 
 #include <opencv2/core/core.hpp>
@@ -21,6 +22,7 @@
 
 using namespace cv;
 using std::vector;
+namespace po = boost::program_options;
 
 typedef unsigned char sample_t;
 
@@ -49,8 +51,8 @@ uint8_t lerp(double factor, uint8_t a, uint8_t b) {
 	return factor*a + (1.0 - factor)*b;
 }
 
-void render(const std::vector<double>& absSpectrum, Mat& source,
-		const size_t& iteration, const size_t& dampen, const size_t& tweens, const bool& randomizeDir) {
+void render(VideoWriter& output, const std::vector<double>& absSpectrum, Mat& source,
+		const size_t& iteration, const double& boost, const size_t& tweens, const size_t& component, const bool& randomizeDir) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
 	cvtColor(source, hsvImg, CV_RGB2HSV);
@@ -71,13 +73,13 @@ void render(const std::vector<double>& absSpectrum, Mat& source,
 				vech[0] = (((uint8_t) hue) / 32) * 32;
 				vech[2] = (vech[2] / 32) * 32;
 
-				uint8_t mod = vech[2];
+				uint8_t mod = vech[component];
 				double hsvradian = ((double) mod / 255.0) * 2.0 * M_PI;
 				double vx = cos(hsvradian);
 				double vy = sin(hsvradian);
 
-				double x = w + ((((vx * mod) * absSpectrum[mod % 8]) / dampen) / (t + 1));
-				double y = h + ((((vy * mod) * absSpectrum[mod % 8]) / dampen) / (t + 1));
+				double x = w + ((((vx * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
+				double y = h + ((((vy * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
 
 				if (x >= 0 && y >= 0 && x < tween.cols && y < tween.rows) {
 					auto& vect = tween.at<Vec3b>(y, x);
@@ -108,13 +110,10 @@ void render(const std::vector<double>& absSpectrum, Mat& source,
 			}
 		}
 	}
-	std::string zeroes = "000000000";
-	std::string num = std::to_string(iteration + 1);
-	num = zeroes.substr(0, zeroes.length() - num.length()) + num;
-	imwrite("frame" + num + ".jpg", frame);
+	output.write(frame);
 }
 
-void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps, size_t dampen, size_t tweens, bool randomizeDir) {
+void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output, size_t fps, double boost, size_t tweens, size_t component, bool randomizeDir) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -145,18 +144,86 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, size_t fps, size_t d
 				absSpectrum[k] = std::abs(spectrum[k]);
 			}
 
-			render(absSpectrum, frame, i, dampen, tweens, randomizeDir);
+			render(output, absSpectrum, frame, i, boost, tweens, component, randomizeDir);
 		}
 	}
 }
 
 int main(int argc, char** argv) {
+	using std::string;
 	srand (time(NULL));
-	SndfileHandle sndfile(argv[1]);
-  VideoCapture capture(argv[2]);
+	string videoFile;
+	string audioFile;
+	string outputVideo = "output.mkv";
+	size_t fps = 25;
+	double boost = 1;
+	size_t tweens = 3;
+	size_t component = 0;
+	bool randomizeDir = false;
+
+  po::options_description genericDesc("Options");
+  genericDesc.add_options()
+  		("fps,f", po::value<size_t>(&fps)->default_value(fps),"The frame rate of the resulting video")
+      ("boost,b", po::value<double>(&boost)->default_value(boost), "Boost factor for the effect. Higher values boost more and values below 1 dampen")
+      ("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
+      ("output,o", po::value<string>(&outputVideo)->default_value(outputVideo), "The filename of the resulting video")
+			("hue,h", "Use the hue of the picture to steer the effect")
+      ("sat,s", "Use the saturation of the picture to steer the effect")
+      ("val,v", "Use the value of the picture to steer the effect")
+      ("rand,r", "Randomize the direction of the effect")
+			("help,h", "Produce help message");
+
+  po::options_description hidden("Hidden options");
+  hidden.add_options()("audioFile", po::value<string>(&audioFile), "audioFile");
+  hidden.add_options()("videoFile", po::value<string>(&videoFile), "videoFile");
+
+  po::options_description cmdline_options;
+  cmdline_options.add(genericDesc).add(hidden);
+
+  po::positional_options_description p;
+  p.add("audioFile", 1);
+  p.add("videoFile", 1);
+
+  po::options_description visible;
+  visible.add(genericDesc);
+
+  po::variables_map vm;
+  po::store(po::command_line_parser(argc, argv).options(cmdline_options).positional(p).run(), vm);
+  po::notify(vm);
+
+  if (vm.count("help") || audioFile.empty() || videoFile.empty()) {
+    std::cerr << "Usage: pixelshift [options] <audioFile> <videoFile>" << std::endl;
+    std::cerr << visible;
+    return 0;
+  }
+
+  if((vm.count("hue") && vm.count("sat")) || (vm.count("hue") && vm.count("val")) || (vm.count("sat") && vm.count("val"))) {
+  	std::cerr << "Only one of hue, sat or val may be specified" << std::endl;
+  }
+
+  if(vm.count("hue")) {
+  	component = 0;
+  } else if(vm.count("sat")) {
+  	component = 1;
+  } else if(vm.count("val")) {
+  	component = 2;
+  }
+
+  if(vm.count("rand")) {
+  	randomizeDir = true;
+  }
+
+
+	SndfileHandle sndfile(audioFile);
+  VideoCapture capture(videoFile);
+  double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
+  double height = capture.get(CV_CAP_PROP_FRAME_HEIGHT);
+  VideoWriter output(outputVideo,CV_FOURCC('F','F','V','1'),fps, Size(width,height));
+
   if( !capture.isOpened() )
       throw "Error when reading " + std::string(argv[2]);
-	pixelShift(capture, sndfile, 25, 20, 3, true);
-
+	pixelShift(capture, sndfile, output, fps, boost, tweens, component, randomizeDir);
+	capture.release();
+	output.release();
 	return 0;
 }
