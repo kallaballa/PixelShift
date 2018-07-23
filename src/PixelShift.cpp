@@ -51,12 +51,32 @@ uint8_t lerp(double factor, uint8_t a, uint8_t b) {
 	return factor * a + (1.0 - factor) * b;
 }
 
+
+void cannyThreshold(Mat& src, Mat& 	detected_edges) {
+	Mat src_gray;
+	cvtColor( src, src_gray, CV_RGB2GRAY );
+  /// Reduce noise with a kernel 3x3
+  GaussianBlur( src_gray, detected_edges, Size(3,3), 1, 1 );
+
+  /// Canny detector
+  Canny( detected_edges, detected_edges, 0, 255, 3 );
+
+  /// Using Canny's output as a mask, we display our result
+//  dst = Scalar::all(0);
+//
+//  src.copyTo( dst, detected_edges);
+ }
+
+
 void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 		Mat& source, const size_t& iteration, const double& boost,
-		const size_t& tweens, const size_t& component, const bool& randomizeDir) {
+		const size_t& tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
 	cvtColor(source, hsvImg, CV_RGB2HSV);
+	Mat edges;
+	if(edgeDetect)
+		cannyThreshold(source,edges);
 
 	uint8_t rot = 0;
 	if (randomizeDir)
@@ -67,6 +87,9 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 		tween = source.clone();
 		for (int h = 0; h < source.rows; h++) {
 			for (int w = 0; w < source.cols; w++) {
+				if(edgeDetect && !edges.at<uint8_t>(h,w))
+					continue;
+
 				auto& vec = source.at<Vec3b>(h, w);
 				auto& vech = hsvImg.at<Vec3b>(h, w);
 				uint16_t hue = (((uint16_t) vech[0]) + rot) % 255;
@@ -113,12 +136,14 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			}
 		}
 	}
+//	imshow("", frame);
+//	waitKey(10);
 	output.write(frame);
 }
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		size_t fps, double boost, size_t tweens, size_t component,
-		bool randomizeDir) {
+		bool randomizeDir, bool edgeDetect) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -150,7 +175,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 			}
 
 			render(output, absSpectrum, frame, i, boost, tweens, component,
-					randomizeDir);
+					randomizeDir, edgeDetect);
 		}
 	}
 }
@@ -166,21 +191,20 @@ int main(int argc, char** argv) {
 	size_t tweens = 3;
 	size_t component = 0;
 	bool randomizeDir = false;
+	bool edgeDetect = false;
 
 	po::options_description genericDesc("Options");
-	genericDesc.add_options()("fps,f",
-			po::value<size_t>(&fps)->default_value(fps),
-			"The frame rate of the resulting video")("boost,b",
-			po::value<double>(&boost)->default_value(boost),
-			"Boost factor for the effect. Higher values boost more and values below 1 dampen")(
-			"tweens,t", po::value<size_t>(&tweens)->default_value(tweens),
-			"How many in between steps should the effect produce")("output,o",
-			po::value<string>(&outputVideo)->default_value(outputVideo),
-			"The filename of the resulting video")("hue,h",
-			"Use the hue of the picture to steer the effect")("sat,s",
-			"Use the saturation of the picture to steer the effect")("val,v",
-			"Use the value of the picture to steer the effect")("rand,r",
-			"Randomize the direction of the effect")("help", "Produce help message");
+	genericDesc.add_options()
+			("fps,f",	po::value<size_t>(&fps)->default_value(fps), "The frame rate of the resulting video")
+			("boost,b",	po::value<double>(&boost)->default_value(boost),"Boost factor for the effect. Higher values boost more and values below 1 dampen")
+			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
+			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
+			("hue,h",	"Use the hue of the picture to steer the effect")
+			("sat,s",	"Use the saturation of the picture to steer the effect")
+			("val,v", "Use the value of the picture to steer the effect")
+			("edge,e","Use edge detection to limit the effect")
+			("rand,r","Randomize the direction of the effect")
+			("help", "Produce help message");
 
 	po::options_description hidden("Hidden options");
 	hidden.add_options()("audioFile", po::value<string>(&audioFile), "audioFile");
@@ -227,6 +251,10 @@ int main(int argc, char** argv) {
 		randomizeDir = true;
 	}
 
+	if (vm.count("edge")) {
+		edgeDetect = true;
+	}
+
 	SndfileHandle sndfile(audioFile);
 	VideoCapture capture(videoFile);
 	double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
@@ -238,7 +266,7 @@ int main(int argc, char** argv) {
 		throw "Error when reading " + videoFile;
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
-			randomizeDir);
+			randomizeDir, edgeDetect);
 	capture.release();
 	output.release();
 	return 0;
