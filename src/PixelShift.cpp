@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+#include <chrono>
 
 #include <boost/program_options.hpp>
 #include <sndfile.hh>
@@ -22,6 +23,8 @@
 
 using namespace cv;
 using std::vector;
+using std::chrono::microseconds;
+
 namespace po = boost::program_options;
 
 typedef unsigned char sample_t;
@@ -69,14 +72,16 @@ void cannyThreshold(Mat& src, Mat& 	detected_edges) {
 
 
 void render(VideoWriter& output, const std::vector<double>& absSpectrum,
-		Mat& source, const size_t& iteration, const double& boost,
-		const size_t& tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect) {
+		Mat& sourceRGB, const size_t& iteration, const double& boost,
+		const size_t& tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
-	cvtColor(source, hsvImg, CV_RGB2HSV);
+	Mat sourceRGBA;
+	cvtColor(sourceRGB, hsvImg, CV_RGB2HSV);
+	cvtColor(sourceRGB, sourceRGBA, CV_RGB2RGBA);
 	Mat edges;
 	if(edgeDetect)
-		cannyThreshold(source,edges);
+		cannyThreshold(sourceRGB,edges);
 
 	uint8_t rot = 0;
 	if (randomizeDir)
@@ -84,13 +89,15 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 	for (size_t t = 0; t < tweens; ++t) {
 		Mat& tween = tweenVec[t];
-		tween = source.clone();
-		for (int h = 0; h < source.rows; h++) {
-			for (int w = 0; w < source.cols; w++) {
+		tween = Mat(sourceRGBA.rows, sourceRGBA.cols, sourceRGBA.type());
+		if(zeroout)
+			tween = Scalar::all(0);
+		for (int h = 0; h < sourceRGBA.rows; h++) {
+			for (int w = 0; w < sourceRGBA.cols; w++) {
 				if(edgeDetect && !edges.at<uint8_t>(h,w))
 					continue;
 
-				auto& vec = source.at<Vec3b>(h, w);
+				auto& vec = sourceRGBA.at<Vec4b>(h, w);
 				auto& vech = hsvImg.at<Vec3b>(h, w);
 				uint16_t hue = (((uint16_t) vech[0]) + rot) % 255;
 				assert(hue <= 255);
@@ -108,10 +115,11 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 						+ ((((vy * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
 
 				if (x >= 0 && y >= 0 && x < tween.cols && y < tween.rows) {
-					auto& vect = tween.at<Vec3b>(y, x);
+					auto& vect = tween.at<Vec4b>(y, x);
 					vect[0] = vec[0];
 					vect[1] = vec[1];
 					vect[2] = vec[2];
+					vect[3] = vec[3];
 				}
 			}
 		}
@@ -119,31 +127,39 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 	std::vector<Mat> blurVec(tweens);
 	for (size_t i = 0; i < tweens; ++i) {
-		GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
+		if(edgeDetect) {
+			blurVec[i] = tweenVec[i].clone();
+		} else {
+				GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
+		}
 	}
 
-	Mat frame = source.clone();
+	Mat frame = sourceRGBA.clone();
 	double factor = 1.0 / tweens;
 	for (size_t i = 0; i < tweens; ++i) {
-		for (int h = 0; h < source.rows; h++) {
-			for (int w = 0; w < source.cols; w++) {
-				auto& vecb = blurVec[i].at<Vec3b>(h, w);
-				auto& vecf = frame.at<Vec3b>(h, w);
+		for (int h = 0; h < sourceRGBA.rows; h++) {
+			for (int w = 0; w < sourceRGBA.cols; w++) {
+				auto& vecb = blurVec[i].at<Vec4b>(h, w);
+				auto& vecf = frame.at<Vec4b>(h, w);
 
-				vecf[0] = lerp(factor, vecb[0], vecf[0]);
-				vecf[1] = lerp(factor, vecb[1], vecf[1]);
-				vecf[2] = lerp(factor, vecb[2], vecf[2]);
+				if(vecb[3] > 0) {
+					vecf[0] = lerp(factor, vecb[0], vecf[0]);
+					vecf[1] = lerp(factor, vecb[1], vecf[1]);
+					vecf[2] = lerp(factor, vecb[2], vecf[2]);
+				}
 			}
 		}
 	}
 //	imshow("", frame);
 //	waitKey(10);
-	output.write(frame);
+	Mat frameRGB;
+	cvtColor(frame, frameRGB, CV_RGBA2RGB);
+	output.write(frameRGB);
 }
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		size_t fps, double boost, size_t tweens, size_t component,
-		bool randomizeDir, bool edgeDetect) {
+		bool randomizeDir, bool edgeDetect, bool zeroout) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -157,6 +173,8 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 	SpectrumType filterSpectrum(SIZE);
 	auto signalFFT = FftFactory::getFft(16);
 
+	auto start = std::chrono::system_clock::now();
+	size_t f = 0;
 #pragma omp for ordered schedule(dynamic)
 	for (size_t j = 0; j < frames.count(); ++j) {
 		bool success;
@@ -175,7 +193,16 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 			}
 
 			render(output, absSpectrum, frame, i, boost, tweens, component,
-					randomizeDir, edgeDetect);
+					randomizeDir, edgeDetect, zeroout);
+			if(f == 10) {
+				auto duration = std::chrono::duration_cast<microseconds>(
+							std::chrono::system_clock::now() - start);
+				std::cerr << ((double)f / ((double)duration.count() / 1000000))  << std::endl;
+				start = std::chrono::system_clock::now();
+				f = 0;
+			} else {
+				++f;
+			}
 		}
 	}
 }
@@ -192,7 +219,7 @@ int main(int argc, char** argv) {
 	size_t component = 0;
 	bool randomizeDir = false;
 	bool edgeDetect = false;
-
+	bool zeroout = false;
 	po::options_description genericDesc("Options");
 	genericDesc.add_options()
 			("fps,f",	po::value<size_t>(&fps)->default_value(fps), "The frame rate of the resulting video")
@@ -204,6 +231,7 @@ int main(int argc, char** argv) {
 			("val,v", "Use the value of the picture to steer the effect")
 			("edge,e","Use edge detection to limit the effect")
 			("rand,r","Randomize the direction of the effect")
+			("zero,z","Zero out tweens before transformation")
 			("help", "Produce help message");
 
 	po::options_description hidden("Hidden options");
@@ -255,6 +283,10 @@ int main(int argc, char** argv) {
 		edgeDetect = true;
 	}
 
+	if (vm.count("zero")) {
+		zeroout = true;
+	}
+
 	SndfileHandle sndfile(audioFile);
 	VideoCapture capture(videoFile);
 	double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
@@ -266,7 +298,7 @@ int main(int argc, char** argv) {
 		throw "Error when reading " + videoFile;
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
-			randomizeDir, edgeDetect);
+			randomizeDir, edgeDetect, zeroout);
 	capture.release();
 	output.release();
 	return 0;

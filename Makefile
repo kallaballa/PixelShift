@@ -67,6 +67,11 @@ hardcore: LDFLAGS += -s
 endif
 hardcore: dirs
 
+asan: CXXFLAGS += -g3 -O0 -rdynamic -fno-omit-frame-pointer -fsanitize=address
+asan: LDFLAGS += -Wl,--export-dynamic -fsanitize=address
+asan: LIBS+= -lbfd
+asan: dirs
+
 clean: dirs
 
 export LDFLAGS

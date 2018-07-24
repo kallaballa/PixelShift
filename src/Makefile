@@ -17,6 +17,7 @@ debug: ${TARGET}
 info: ${TARGET}
 profile: ${TARGET}
 hardcore: ${TARGET}
+asan: ${TARGET}
 
 ${TARGET}: ${OBJS}
 	${CXX} ${LDFLAGS} -o $@ $^ ${LIBS}
