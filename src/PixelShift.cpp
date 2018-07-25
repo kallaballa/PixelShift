@@ -569,12 +569,12 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		for(size_t k = 0; k < 16; ++k) {
 			if(!capture.read(frame))
 				return;
-			video.push_back(frame);
+			video.push_back(frame.clone());
 		}
 
 
-
-#pragma omp parallel for
+		rendered.clear();
+#pragma omp parallel for ordered schedule(dynamic)
 		for(size_t k = 0; k < video.size(); ++k) {
 				SpectrumType spectrum = signalFFT->fft(frames.frame(j).toArray());
 				std::size_t halfLength = spectrum.size() / 2;
@@ -583,9 +583,10 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 					absSpectrum[k] = std::abs(spectrum[k]);
 				}
 
-				Mat r = render(output, absSpectrum, frame, i, boost, tweens, component,
+				Mat r = render(output, absSpectrum, video[k].clone(), i, boost, tweens, component,
 						randomizeDir, edgeDetect, zeroout, morph);
-				rendered.push_back(r);
+#pragma omp ordered
+				rendered.push_back(r.clone());
 				if(f == 10) {
 					auto duration = std::chrono::duration_cast<microseconds>(
 								std::chrono::system_clock::now() - start);
@@ -600,7 +601,6 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		for(size_t k = 0; k < rendered.size(); ++k) {
 			output.write(rendered[k]);
 		}
-		rendered.clear();
 	}
 }
 
