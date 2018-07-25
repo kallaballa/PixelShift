@@ -40,7 +40,7 @@ double distance(Point2f& p1, Point2f& p2){
 return sqrt(pow(p1.x - p2.x, 2) + pow(p1.y - p2.y, 2));
 }
 
-std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(Mat& testRGB, Mat& goalRGB) {
+std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const Mat& testRGB, const Mat& goalRGB) {
   Mat img_1;
   Mat img_2;
 
@@ -391,7 +391,7 @@ uint8_t lerp(double factor, uint8_t a, uint8_t b) {
 }
 
 
-void cannyThreshold(Mat& src, Mat& 	detected_edges) {
+void cannyThreshold(const Mat& src, const Mat& 	detected_edges) {
 	Mat src_gray;
 	cvtColor( src, src_gray, CV_RGB2GRAY );
   /// Reduce noise with a kernel 3x3
@@ -402,8 +402,8 @@ void cannyThreshold(Mat& src, Mat& 	detected_edges) {
  }
 
 
-void render(VideoWriter& output, const std::vector<double>& absSpectrum,
-		Mat& sourceRGB, const size_t& iteration, const double& boost,
+Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
+		const Mat& sourceRGB, const size_t& iteration, const double& boost,
 		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const bool& morph) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
@@ -542,7 +542,7 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 //	waitKey(10);
 	Mat frameRGB;
 	cvtColor(frame, frameRGB, CV_RGBA2RGB);
-	output.write(frameRGB);
+	return frameRGB;
 }
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
@@ -560,38 +560,47 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 	FramesCollection frames(in, SIZE);
 	SpectrumType filterSpectrum(SIZE);
 	auto signalFFT = FftFactory::getFft(16);
-
+	std::vector<Mat> video;
+	std::vector<Mat> rendered;
 	auto start = std::chrono::system_clock::now();
 	size_t f = 0;
-#pragma omp for ordered schedule(dynamic)
 	for (size_t j = 0; j < frames.count(); ++j) {
-		bool success;
-#pragma omp ordered
-		{
-			success = capture.read(frame);
-			++i;
+		video.clear();
+		for(size_t k = 0; k < 16; ++k) {
+			if(!capture.read(frame))
+				return;
+			video.push_back(frame);
 		}
 
-		if (success) {
-			SpectrumType spectrum = signalFFT->fft(frames.frame(j).toArray());
-			std::size_t halfLength = spectrum.size() / 2;
-			std::vector<double> absSpectrum(halfLength);
-			for (std::size_t k = 0; k < halfLength; ++k) {
-				absSpectrum[k] = std::abs(spectrum[k]);
-			}
 
-			render(output, absSpectrum, frame, i, boost, tweens, component,
-					randomizeDir, edgeDetect, zeroout, morph);
-			if(f == 10) {
-				auto duration = std::chrono::duration_cast<microseconds>(
-							std::chrono::system_clock::now() - start);
-				std::cerr << ((double)f / ((double)duration.count() / 1000000))  << std::endl;
-				start = std::chrono::system_clock::now();
-				f = 0;
-			} else {
-				++f;
-			}
+
+#pragma omp parallel for
+		for(size_t k = 0; k < video.size(); ++k) {
+				SpectrumType spectrum = signalFFT->fft(frames.frame(j).toArray());
+				std::size_t halfLength = spectrum.size() / 2;
+				std::vector<double> absSpectrum(halfLength);
+				for (std::size_t k = 0; k < halfLength; ++k) {
+					absSpectrum[k] = std::abs(spectrum[k]);
+				}
+
+				Mat r = render(output, absSpectrum, frame, i, boost, tweens, component,
+						randomizeDir, edgeDetect, zeroout, morph);
+				rendered.push_back(r);
+				if(f == 10) {
+					auto duration = std::chrono::duration_cast<microseconds>(
+								std::chrono::system_clock::now() - start);
+					std::cerr << ((double)f / ((double)duration.count() / 1000000))  << std::endl;
+					start = std::chrono::system_clock::now();
+					f = 0;
+				} else {
+					++f;
+				}
 		}
+
+		for(size_t k = 0; k < rendered.size(); ++k) {
+			output.write(rendered[k]);
+		}
+		rendered.clear();
 	}
 }
 
