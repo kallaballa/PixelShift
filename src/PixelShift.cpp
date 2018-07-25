@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <chrono>
+#include <list>
 
 #include <boost/program_options.hpp>
 #include <sndfile.hh>
@@ -31,7 +32,15 @@ namespace po = boost::program_options;
 typedef unsigned char sample_t;
 
 
-std::pair<std::vector<KeyPoint>, std::vector<KeyPoint>> generate_keypoints(Mat& testRGB, Mat& goalRGB) {
+bool operator==(const KeyPoint& kp1, const KeyPoint& kp2) {
+	return kp1.pt.x == kp2.pt.x && kp1.pt.y == kp2.pt.y;
+}
+
+double distance(Point2f& p1, Point2f& p2){
+return sqrt(pow(p1.x - p2.x, 2) + pow(p1.y - p2.y, 2));
+}
+
+std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(Mat& testRGB, Mat& goalRGB) {
   Mat img_1;
   Mat img_2;
 
@@ -43,9 +52,45 @@ std::pair<std::vector<KeyPoint>, std::vector<KeyPoint>> generate_keypoints(Mat& 
 
    std::vector<KeyPoint> keypoints_1, keypoints_2;
 
+
+   std::vector<Point2f> p1, p2;
+
    detector->detect( img_1, keypoints_1 );
    detector->detect( img_2, keypoints_2 );
-   return {keypoints_1, keypoints_2};
+
+//   Mat kpimg1;
+//	 drawKeypoints(testRGB, keypoints_1, kpimg1);
+//   Mat kpimg2;
+//	 drawKeypoints(goalRGB, keypoints_2, kpimg2);
+//	 imshow("", kpimg1);
+//	 waitKey(0);
+//	 imshow("", kpimg2);
+//	 waitKey(0);
+	 for(auto& kp1 : keypoints_1) {
+  	 p1.push_back(kp1.pt);
+
+  	 double min_distance = std::numeric_limits<double>::max();
+  	 Point2f closest;
+     for(auto& kp2 : keypoints_2) {
+    	 double dist = distance(kp1.pt, kp2.pt);
+    	 if(dist < min_distance) {
+    		 min_distance = dist;
+    		 closest = kp2.pt;
+    	 }
+     }
+     p2.push_back(closest);
+   }
+   /*std::sort(keypoints_1.begin(), keypoints_1.end(), [](cv::KeyPoint a, cv::KeyPoint b) { return a.response > b.response; });
+   std::sort(keypoints_2.begin(), keypoints_2.end(), [](cv::KeyPoint a, cv::KeyPoint b) { return a.response > b.response; });
+
+   for(auto& kp : keypoints_1) {
+  	 p1.push_back(kp.pt);
+   }
+
+   for(auto& kp : keypoints_2) {
+   	 p2.push_back(kp.pt);
+    }*/
+   return {p1, p2};
 }
 
 cv::Mat PointVec2HomogeneousMat(const std::vector<cv::Point2f>& pts)
@@ -424,27 +469,48 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			}
 		}
 	}
-	tweens = morphTweens;
+	if(morph)
+		tweens = morphTweens;
+
 	Mat frame = sourceRGBA.clone();
 	std::vector<Mat> blurVec(tweens);
 
 	if(morph) {
 		for (size_t i = 0; i < tweens; ++i) {
+			Mat morphed;
 			Mat trgb;
 			cvtColor(tweenVec[0], trgb, CV_RGBA2RGB);
 			auto kpp = generate_keypoints(sourceRGB, trgb);
-			std::vector<Point2f> kp1;
-			std::vector<Point2f> kp2;
 			std::vector<Point2f> outputkp;
+			auto& kp1 = kpp.first;
+			auto& kp2 = kpp.second;
 
-			for(KeyPoint& kp : kpp.first) {
-				kp1.push_back(kp.pt);
+			if(kp2.size() > kp1.size()) {
+				kp2.resize(kp1.size());
+			} else if(kp1.size() > kp2.size()) {
+				kp1.resize(kp2.size());
 			}
-			for(KeyPoint& kp : kpp.second) {
-				kp2.push_back(kp.pt);
-			}
+//			Mat kpimg1 = sourceRGB;
+//
+//			for(auto pt : kp1) {
+//				circle(kpimg1, pt, 2, {255,0,0});
+//			}
+//
+//			for(auto pt : kp1) {
+//				circle(kpimg1, pt, 2, {0,255,0});
+//			}
+//
+//			for(size_t j = 0; j< kp1.size(); ++j) {
+//				line(kpimg1, kp1[j], kp2[j],  {0,0,255});
+//			}
+//
+//			imshow("",kpimg1);
+//			waitKey(0);
 
-			ImageMorphing(sourceRGB,kp1,trgb, kp2, blurVec[i], outputkp, 1.0/tweens, 1.0/tweens);
+			ImageMorphing(sourceRGB,kp1,trgb, kp2, morphed, outputkp, 1.0 / (tweens - i), 1.0 / (tweens - i));
+
+
+			cvtColor(morphed, blurVec[i], CV_RGB2RGBA);
 		}
 	} else {
 		for (size_t i = 0; i < tweens; ++i) {
