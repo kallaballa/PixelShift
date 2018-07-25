@@ -84,13 +84,17 @@ void render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 	for (size_t t = 0; t < tweens; ++t) {
 		Mat& tween = tweenVec[t];
+		tween = Mat(sourceRGBA.rows, sourceRGBA.cols, sourceRGBA.type());
+
 		if(!edgeDetect) {
-			tween = Mat(sourceRGBA.rows, sourceRGBA.cols, sourceRGBA.type());
 			if(zeroout)
 				tween = Scalar::all(0);
 		}
 		else {
-			tween = sourceRGBA.clone();
+			if(zeroout)
+				tween = Scalar::all(0);
+			else
+				tween = sourceRGBA.clone();
 		}
 		for (int h = 0; h < sourceRGBA.rows; h++) {
 			for (int w = 0; w < sourceRGBA.cols; w++) {
