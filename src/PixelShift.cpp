@@ -15,6 +15,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/features2d.hpp>
+#include <opencv2/calib3d.hpp>
 
 #define cimg_use_jpeg
 #include "aquila/global.h"
@@ -40,6 +41,121 @@ double distance(Point2f& p1, Point2f& p2){
 return sqrt(pow(p1.x - p2.x, 2) + pow(p1.y - p2.y, 2));
 }
 
+int ratioTest(std::vector<std::vector<cv::DMatch> >
+    &matches) {
+#ifndef _NO_OPENCV
+        int removed=0;
+        // for all matches
+        for (std::vector<std::vector<cv::DMatch> >::iterator
+            matchIterator= matches.begin();
+            matchIterator!= matches.end(); ++matchIterator) {
+                // if 2 NN has been identified
+                if (matchIterator->size() > 1) {
+                    // check distance ratio
+                    if ((*matchIterator)[0].distance/
+                        (*matchIterator)[1].distance > 0.7) {
+                            matchIterator->clear(); // remove match
+                            removed++;
+                    }
+                } else { // does not have 2 neighbours
+                    matchIterator->clear(); // remove match
+                    removed++;
+                }
+        }
+        return removed;
+#else
+        return 0;
+#endif
+}
+
+cv::Mat ransacTest(
+    const std::vector<cv::DMatch>& matches,
+    const std::vector<cv::KeyPoint>& keypoints1,
+    const std::vector<cv::KeyPoint>& keypoints2,
+    std::vector<cv::DMatch>& outMatches)
+{
+#ifndef _NO_OPENCV
+    // Convert keypoints into Point2f
+    std::vector<cv::Point2f> points1, points2;
+    for (std::vector<cv::DMatch>::
+        const_iterator it= matches.begin();
+        it!= matches.end(); ++it) {
+            // Get the position of left keypoints
+            float x= keypoints1[it->queryIdx].pt.x;
+            float y= keypoints1[it->queryIdx].pt.y;
+            points1.push_back(cv::Point2f(x,y));
+            // Get the position of right keypoints
+            x= keypoints2[it->trainIdx].pt.x;
+            y= keypoints2[it->trainIdx].pt.y;
+            points2.push_back(cv::Point2f(x,y));
+    }
+    // Compute F matrix using RANSAC
+    std::vector<uchar> inliers(points1.size(),0);
+    std::vector<cv::Point2f> out;
+    //cv::Mat fundemental= cv::findFundamentalMat(points1, points2, out, CV_FM_RANSAC, 3, 0.99);
+
+
+    cv::Mat fundemental= findFundamentalMat(
+        cv::Mat(points1),cv::Mat(points2), // matching points
+        inliers,      // match status (inlier or outlier)
+        CV_FM_RANSAC, // RANSAC method
+        3.0,     // distance to epipolar line
+        0.99);  // confidence probability
+
+    // extract the surviving (inliers) matches
+    std::vector<uchar>::const_iterator
+        itIn= inliers.begin();
+    std::vector<cv::DMatch>::const_iterator
+        itM= matches.begin();
+    // for all matches
+    for ( ;itIn!= inliers.end(); ++itIn, ++itM) {
+        if (*itIn) { // it is a valid match
+            outMatches.push_back(*itM);
+        }
+    }
+    return fundemental;
+#else
+    return cv::Mat();
+#endif
+}
+
+void symmetryTest(
+    const std::vector<std::vector<cv::DMatch>>& matches1,
+    const std::vector<std::vector<cv::DMatch>>& matches2,
+    std::vector<cv::DMatch>& symMatches) {
+#ifndef _NO_OPENCV
+  // for all matches image 1 -> image 2
+        for (std::vector<std::vector<cv::DMatch>>::
+            const_iterator matchIterator1= matches1.begin();
+            matchIterator1!= matches1.end(); ++matchIterator1) {
+                // ignore deleted matches
+                if (matchIterator1->size() < 2)
+                    continue;
+                // for all matches image 2 -> image 1
+                for (std::vector<std::vector<cv::DMatch>>::
+                    const_iterator matchIterator2= matches2.begin();
+                    matchIterator2!= matches2.end();
+                ++matchIterator2) {
+                    // ignore deleted matches
+                    if (matchIterator2->size() < 2)
+                        continue;
+                    // Match symmetry test
+                    if ((*matchIterator1)[0].queryIdx ==
+                        (*matchIterator2)[0].trainIdx  &&
+                        (*matchIterator2)[0].queryIdx ==
+                        (*matchIterator1)[0].trainIdx) {
+                            // add symmetrical match
+                            symMatches.push_back(
+                                cv::DMatch((*matchIterator1)[0].queryIdx,
+                                (*matchIterator1)[0].trainIdx,
+                                (*matchIterator1)[0].distance));
+                            break; // next match in image 1 -> image 2
+                    }
+                }
+        }
+#endif
+}
+
 std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const Mat& testRGB, const Mat& goalRGB) {
   Mat img_1;
   Mat img_2;
@@ -47,17 +163,74 @@ std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const M
   cvtColor(goalRGB, img_1, CV_RGB2GRAY);
   cvtColor(testRGB, img_2, CV_RGB2GRAY);
 
-  cv::Ptr<cv::ORB> detector = cv::ORB::create(5000);
+  cv::Ptr<cv::ORB> detector = cv::ORB::create(500);
   cv::Ptr<cv::ORB> extractor = cv::ORB::create();
 
    std::vector<KeyPoint> keypoints_1, keypoints_2;
+   Mat descriptors1, descriptors2;
 
-
-   std::vector<Point2f> p1, p2;
+   std::vector<Point2f> p1, p2, ps1, ps2;
 
    detector->detect( img_1, keypoints_1 );
    detector->detect( img_2, keypoints_2 );
 
+   extractor->compute( img_1, keypoints_1, descriptors1 );
+     extractor->compute( img_2, keypoints_2, descriptors2 );
+
+     if(descriptors1.empty() || descriptors2.empty()) {
+       return {{},{}};
+     }
+     //-- Step 3: Matching descriptor vectors using FLANN matcher
+     cv::Ptr<cv::flann::IndexParams> indexParams = new cv::flann::LshIndexParams(12, 20, 2);
+     FlannBasedMatcher matcher1(indexParams);
+     FlannBasedMatcher matcher2(indexParams);
+     std::vector<std::vector<cv::DMatch>> matches1, matches2;
+     std::vector<DMatch> goodMatches;
+     std::vector<DMatch> symMatches;
+
+     matcher1.knnMatch(descriptors1,descriptors2, matches1,2);
+     matcher2.knnMatch(descriptors2,descriptors1, matches2,2);
+
+     ratioTest(matches1);
+     ratioTest(matches2);
+
+     symmetryTest(matches1,matches2,symMatches);
+
+     if(symMatches.empty()) {
+       return {{},{}};
+     }
+     cv::Mat fundemental= ransacTest(symMatches,
+             keypoints_1, keypoints_2, goodMatches);
+
+     if(goodMatches.empty()) {
+       return {{},{}};
+     }
+//     Mat img_matches;
+//     drawMatches( img_1, keypoints_1, img_2, keypoints_2,
+//         goodMatches, img_matches, Scalar::all(-1), Scalar::all(-1),
+//                  vector<char>(), DrawMatchesFlags::NOT_DRAW_SINGLE_POINTS );
+//
+//     imshow("", img_matches);
+//     waitKey(10);
+     for(auto& match : goodMatches) {
+    	 p1.push_back(keypoints_1[match.trainIdx].pt);
+    	 p2.push_back(keypoints_1[match.queryIdx].pt);
+     }
+
+		 for(auto& pt1 : p1) {
+			 ps1.push_back(pt1);
+
+			 double min_distance = std::numeric_limits<double>::max();
+			 Point2f closest;
+				for(auto& pt2 : p2) {
+				 double dist = distance(pt1, pt2);
+				 if(dist < min_distance) {
+					 min_distance = dist;
+					 closest = pt2;
+				 }
+				}
+				ps2.push_back(closest);
+			}
 //   Mat kpimg1;
 //	 drawKeypoints(testRGB, keypoints_1, kpimg1);
 //   Mat kpimg2;
@@ -66,20 +239,20 @@ std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const M
 //	 waitKey(0);
 //	 imshow("", kpimg2);
 //	 waitKey(0);
-	 for(auto& kp1 : keypoints_1) {
-  	 p1.push_back(kp1.pt);
-
-  	 double min_distance = std::numeric_limits<double>::max();
-  	 Point2f closest;
-     for(auto& kp2 : keypoints_2) {
-    	 double dist = distance(kp1.pt, kp2.pt);
-    	 if(dist < min_distance) {
-    		 min_distance = dist;
-    		 closest = kp2.pt;
-    	 }
-     }
-     p2.push_back(closest);
-   }
+//	 for(auto& kp1 : keypoints_1) {
+//  	 p1.push_back(kp1.pt);
+//
+//  	 double min_distance = std::numeric_limits<double>::max();
+//  	 Point2f closest;
+//     for(auto& kp2 : keypoints_2) {
+//    	 double dist = distance(kp1.pt, kp2.pt);
+//    	 if(dist < min_distance) {
+//    		 min_distance = dist;
+//    		 closest = kp2.pt;
+//    	 }
+//     }
+//     p2.push_back(closest);
+//   }
    /*std::sort(keypoints_1.begin(), keypoints_1.end(), [](cv::KeyPoint a, cv::KeyPoint b) { return a.response > b.response; });
    std::sort(keypoints_2.begin(), keypoints_2.end(), [](cv::KeyPoint a, cv::KeyPoint b) { return a.response > b.response; });
 
@@ -90,7 +263,7 @@ std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const M
    for(auto& kp : keypoints_2) {
    	 p2.push_back(kp.pt);
     }*/
-   return {p1, p2};
+   return {ps1, ps2};
 }
 
 cv::Mat PointVec2HomogeneousMat(const std::vector<cv::Point2f>& pts)
@@ -476,6 +649,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 	std::vector<Mat> blurVec(tweens);
 
 	if(morph) {
+		float step = 1.0 / (tweens + 1);
 		for (size_t i = 0; i < tweens; ++i) {
 			Mat morphed;
 			Mat trgb;
@@ -485,12 +659,12 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			auto& kp1 = kpp.first;
 			auto& kp2 = kpp.second;
 
-			if(kp2.size() > kp1.size()) {
-				kp2.resize(kp1.size());
-			} else if(kp1.size() > kp2.size()) {
-				kp1.resize(kp2.size());
-			}
-//			Mat kpimg1 = sourceRGB;
+//			if(kp2.size() > kp1.size()) {
+//				kp2.resize(kp1.size());
+//			} else if(kp1.size() > kp2.size()) {
+//				kp1.resize(kp2.size());
+//			}
+//			Mat kpimg1 = sourceRGB.clone();
 //
 //			for(auto pt : kp1) {
 //				circle(kpimg1, pt, 2, {255,0,0});
@@ -504,10 +678,19 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 //				line(kpimg1, kp1[j], kp2[j],  {0,0,255});
 //			}
 //
-//			imshow("",kpimg1);
-//			waitKey(0);
-
-			ImageMorphing(sourceRGB,kp1,trgb, kp2, morphed, outputkp, 1.0 / (tweens - i), 1.0 / (tweens - i));
+//			imshow("s",kpimg1);
+//			waitKey(5);
+			if(kp1.empty() || kp2.empty()) {
+				morphed = trgb.clone();
+			}
+			else {
+				assert(sourceRGB.cols == trgb.cols && sourceRGB.rows == trgb.rows);
+				try {
+					ImageMorphing(sourceRGB,kp1,trgb, kp2, morphed, outputkp, step * i, step + i);
+				} catch(...) {
+					morphed = trgb.clone();
+				}
+			}
 
 
 			cvtColor(morphed, blurVec[i], CV_RGB2RGBA);
@@ -562,21 +745,32 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 	auto signalFFT = FftFactory::getFft(16);
 	std::vector<Mat> video;
 	std::vector<Mat> rendered;
+	std::vector<Frame> audioFrames;
+
 	auto start = std::chrono::system_clock::now();
 	size_t f = 0;
-	for (size_t j = 0; j < frames.count(); ++j) {
+	size_t audioFrameI = 0;
+
+	while(true) {
 		video.clear();
+		audioFrames.clear();
 		for(size_t k = 0; k < 16; ++k) {
 			if(!capture.read(frame))
 				return;
 			video.push_back(frame.clone());
+
+			if(audioFrameI >= frames.count())
+				return;
+
+			audioFrames.push_back(frames.frame(audioFrameI));
+			++audioFrameI;
 		}
 
 
 		rendered.clear();
 #pragma omp parallel for ordered schedule(dynamic)
 		for(size_t k = 0; k < video.size(); ++k) {
-				SpectrumType spectrum = signalFFT->fft(frames.frame(j).toArray());
+				SpectrumType spectrum = signalFFT->fft(audioFrames[k].toArray());
 				std::size_t halfLength = spectrum.size() / 2;
 				std::vector<double> absSpectrum(halfLength);
 				for (std::size_t k = 0; k < halfLength; ++k) {
@@ -620,7 +814,7 @@ int main(int argc, char** argv) {
 	bool morph = false;
 	po::options_description genericDesc("Options");
 	genericDesc.add_options()
-			("fps,f",	po::value<size_t>(&fps)->default_value(fps), "The frame rate of the resulting video")
+			("fps,f",	po::value<size_t>(&fps)->default_value(fps), "The frame rate of the input video")
 			("boost,b",	po::value<double>(&boost)->default_value(boost),"Boost factor for the effect. Higher values boost more and values below 1 dampen")
 			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
 			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
