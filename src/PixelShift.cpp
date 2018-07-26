@@ -7,6 +7,7 @@
 #include <ctime>
 #include <chrono>
 #include <list>
+#include <algorithm>
 
 #include <boost/program_options.hpp>
 #include <sndfile.hh>
@@ -564,7 +565,7 @@ uint8_t lerp(double factor, uint8_t a, uint8_t b) {
 }
 
 
-void cannyThreshold(const Mat& src, const Mat& 	detected_edges) {
+void cannyThreshold(const Mat& src, Mat& 	detected_edges) {
 	Mat src_gray;
 	cvtColor( src, src_gray, CV_RGB2GRAY );
   /// Reduce noise with a kernel 3x3
@@ -730,7 +731,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		size_t fps, double boost, size_t tweens, size_t component,
-		bool randomizeDir, bool edgeDetect, bool zeroout, bool morph) {
+		bool randomizeDir, bool edgeDetect, bool zeroout, bool morph, size_t lowPass) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -741,7 +742,6 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 
 	SignalSource in(data, samplingRate);
 	FramesCollection frames(in, SIZE);
-	SpectrumType filterSpectrum(SIZE);
 	auto signalFFT = FftFactory::getFft(16);
 	std::vector<Mat> video;
 	std::vector<Mat> rendered;
@@ -751,6 +751,19 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 	size_t f = 0;
 	size_t audioFrameI = 0;
 
+  SpectrumType filterSpectrum(SIZE);
+  if(lowPass > 0) {
+		for (std::size_t i = 0; i < SIZE; ++i) {
+			if (i < (SIZE * ((double)lowPass) / ((double)samplingRate))) {
+					// passband
+					filterSpectrum[i] = 1.0;
+			}
+			else {
+					// stopband
+					filterSpectrum[i] = 0.0;
+			}
+		}
+  }
 	while(true) {
 		video.clear();
 		audioFrames.clear();
@@ -771,6 +784,13 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 #pragma omp parallel for ordered schedule(dynamic)
 		for(size_t k = 0; k < video.size(); ++k) {
 				SpectrumType spectrum = signalFFT->fft(audioFrames[k].toArray());
+		    std::transform(
+		        std::begin(spectrum),
+		        std::end(spectrum),
+		        std::begin(filterSpectrum),
+		        std::begin(spectrum),
+		        [] (Aquila::ComplexType x, Aquila::ComplexType y) { return x * y; }
+		    );
 				std::size_t halfLength = spectrum.size() / 2;
 				std::vector<double> absSpectrum(halfLength);
 				for (std::size_t k = 0; k < halfLength; ++k) {
@@ -812,11 +832,13 @@ int main(int argc, char** argv) {
 	bool edgeDetect = false;
 	bool zeroout = false;
 	bool morph = false;
+	size_t lowPass = 0;
 	po::options_description genericDesc("Options");
 	genericDesc.add_options()
 			("fps,f",	po::value<size_t>(&fps)->default_value(fps), "The frame rate of the input video")
 			("boost,b",	po::value<double>(&boost)->default_value(boost),"Boost factor for the effect. Higher values boost more and values below 1 dampen")
 			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
+			("lowpass,l", po::value<size_t>(&lowPass)->default_value(lowPass), "Apply a low pass filter at given frequency to the audio signal")
 			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
 			("morph,m",	"Use image morphing for tweening")
 			("hue,h",	"Use the hue of the picture to steer the effect")
@@ -895,7 +917,7 @@ int main(int argc, char** argv) {
 		throw "Error when reading " + videoFile;
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
-			randomizeDir, edgeDetect, zeroout, morph);
+			randomizeDir, edgeDetect, zeroout, morph, lowPass);
 	capture.release();
 	output.release();
 	return 0;
