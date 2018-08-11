@@ -922,7 +922,7 @@ int main(int argc, char** argv) {
 			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
 			("lowpass,l", po::value<size_t>(&lowPass)->default_value(lowPass), "Apply a low pass filter at given frequency to the audio signal")
 			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
-			("morph,m",	po::value<double>(&morph)->default_value(morph),"The maximum feature distance for image morphing. 1.0 means the max distance equals the diagonal or the video")
+			("morph,m",	po::value<double>(&morph)->default_value(morph),"The maximum feature distance for image morphing. 1.0 means the max distance equals the diagonal of the video")
 			("cartoon,c",	"Use cartoon effect")
 			("hue,h",	"Use the hue of the picture to steer the effect")
 			("sat,s",	"Use the saturation of the picture to steer the effect")
