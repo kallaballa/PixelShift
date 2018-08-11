@@ -211,7 +211,7 @@ void symmetryTest(
 #endif
 }
 
-std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const Mat& testRGB, const Mat& goalRGB) {
+std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const Mat& testRGB, const Mat& goalRGB, const double& morph) {
   Mat img_1;
   Mat img_2;
 
@@ -272,11 +272,11 @@ std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const M
     	 p2.push_back(keypoints_1[match.queryIdx].pt);
      }
 
-		 for(auto& pt1 : p1) {
-			 ps1.push_back(pt1);
-
-			 double min_distance = std::numeric_limits<double>::max();
-			 Point2f closest;
+     double diagonal = hypot(goalRGB.cols, goalRGB.rows);
+     double maxdist = diagonal * morph;
+     for(auto& pt1 : p1) {
+			 double min_distance = maxdist;
+			 Point2f closest = {0,0};
 				for(auto& pt2 : p2) {
 				 double dist = distance(pt1, pt2);
 				 if(dist < min_distance) {
@@ -284,7 +284,11 @@ std::pair<std::vector<Point2f>, std::vector<Point2f>> generate_keypoints(const M
 					 closest = pt2;
 				 }
 				}
-				ps2.push_back(closest);
+
+		    if(!(closest.x == 0 && closest.y == 0)) {
+					ps1.push_back(pt1);
+					ps2.push_back(closest);
+				}
 			}
 //   Mat kpimg1;
 //	 drawKeypoints(testRGB, keypoints_1, kpimg1);
@@ -632,7 +636,7 @@ void cannyThreshold(const Mat& src, Mat& 	detected_edges) {
 
 Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 		const Mat& sourceRGB, const size_t& iteration, const double& boost,
-		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const bool& morph, const bool& cartoonize) {
+		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const double& morph, const bool& cartoonize) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
 	Mat sourceRGBA;
@@ -640,7 +644,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 	cvtColor(sourceRGB, sourceRGBA, CV_RGB2RGBA);
 	Mat edges;
 	size_t morphTweens = 0;
-	if(morph) {
+	if(morph > 0) {
 		morphTweens = tweens;
 		tweens = 1;
 	}
@@ -710,19 +714,19 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			}
 		}
 	}
-	if(morph)
+	if(morph > 0)
 		tweens = morphTweens;
 
 	Mat frame = sourceRGBA.clone();
 	std::vector<Mat> blurVec(tweens);
 
-	if(morph) {
+	if(morph > 0) {
 		float step = 1.0 / (tweens + 1);
 		for (size_t i = 0; i < tweens; ++i) {
 			Mat morphed;
 			Mat trgb;
 			cvtColor(tweenVec[0], trgb, CV_RGBA2RGB);
-			auto kpp = generate_keypoints(sourceRGB, trgb);
+			auto kpp = generate_keypoints(sourceRGB, trgb, morph);
 			std::vector<Point2f> outputkp;
 			auto& kp1 = kpp.first;
 			auto& kp2 = kpp.second;
@@ -806,7 +810,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		size_t fps, double boost, size_t tweens, size_t component,
-		bool randomizeDir, bool edgeDetect, bool zeroout, bool morph, size_t lowPass, bool cartoonize) {
+		bool randomizeDir, bool edgeDetect, bool zeroout, double morph, size_t lowPass, bool cartoonize) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -908,7 +912,7 @@ int main(int argc, char** argv) {
 	bool randomizeDir = false;
 	bool edgeDetect = false;
 	bool zeroout = false;
-	bool morph = false;
+	double morph = 0;
 	bool cartoonize = false;
 	size_t lowPass = 0;
 	po::options_description genericDesc("Options");
@@ -918,8 +922,8 @@ int main(int argc, char** argv) {
 			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
 			("lowpass,l", po::value<size_t>(&lowPass)->default_value(lowPass), "Apply a low pass filter at given frequency to the audio signal")
 			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
+			("morph,m",	po::value<double>(&morph)->default_value(morph),"The maximum feature distance for image morphing. 1.0 means the max distance equals the diagonal or the video")
 			("cartoon,c",	"Use cartoon effect")
-			("morph,m",	"Use image morphing for tweening")
 			("hue,h",	"Use the hue of the picture to steer the effect")
 			("sat,s",	"Use the saturation of the picture to steer the effect")
 			("val,v", "Use the value of the picture to steer the effect")
@@ -979,10 +983,6 @@ int main(int argc, char** argv) {
 
 	if (vm.count("zero")) {
 		zeroout = true;
-	}
-
-	if (vm.count("morph")) {
-		morph = true;
 	}
 
 	if(vm.count("cartoon")) {
