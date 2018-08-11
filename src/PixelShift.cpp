@@ -33,6 +33,60 @@ namespace po = boost::program_options;
 
 typedef unsigned char sample_t;
 
+Mat cartoon(const Mat& img, const double& strength)
+{
+    /** EDGES **/
+    // Apply median filter to remove possible noise
+    Mat imgMedian;
+    medianBlur(img, imgMedian, 7);
+
+    // Detect edges with canny
+    Mat imgCanny;
+    Canny(imgMedian, imgCanny, 50, 150);
+
+    // Dilate the edges
+    Mat kernel= getStructuringElement(MORPH_RECT, Size(strength + 1,strength + 1));
+    dilate(imgCanny, imgCanny, kernel);
+
+    // Scale edges values to 1 and invert values
+    imgCanny= imgCanny/255;
+    imgCanny= 1-imgCanny;
+
+    // Use float values to allow multiply between 0 and 1
+    Mat imgCannyf;
+    imgCanny.convertTo(imgCannyf, CV_32FC3);
+
+    // Blur the edgest to do smooth effect
+    blur(imgCannyf, imgCannyf, Size(5,5));
+
+    /** COLOR **/
+    // Apply bilateral filter to homogenizes color
+    Mat imgBF;
+    bilateralFilter(img, imgBF, 9, strength * 30, strength * 30);
+
+    // truncate colors
+    Mat result= imgBF/25;
+    result= result*25;
+
+    /** MERGES COLOR + EDGES **/
+    // Create a 3 channles for edges
+    Mat imgCanny3c;
+    Mat cannyChannels[]={ imgCannyf, imgCannyf, imgCannyf};
+    merge(cannyChannels, 3, imgCanny3c);
+
+    // Convert color result to float
+    Mat resultf;
+    result.convertTo(resultf, CV_32FC3);
+
+    // Multiply color and edges matrices
+    multiply(resultf, imgCanny3c, resultf);
+
+    // convert to 8 bits color
+    resultf.convertTo(result, CV_8UC3);
+
+    return result;
+}
+
 
 bool operator==(const KeyPoint& kp1, const KeyPoint& kp2) {
 	return kp1.pt.x == kp2.pt.x && kp1.pt.y == kp2.pt.y;
@@ -578,7 +632,7 @@ void cannyThreshold(const Mat& src, Mat& 	detected_edges) {
 
 Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 		const Mat& sourceRGB, const size_t& iteration, const double& boost,
-		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const bool& morph) {
+		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const bool& morph, const bool& cartoonize) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
 	Mat sourceRGBA;
@@ -597,48 +651,61 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 	if (randomizeDir)
 		rot = rand() % 255;
 
-	for (size_t t = 0; t < tweens; ++t) {
-		Mat& tween = tweenVec[t];
-		tween = Mat(sourceRGBA.rows, sourceRGBA.cols, sourceRGBA.type());
+	if(cartoonize) {
+		for (size_t t = 0; t < tweens; ++t) {
+			Mat& tween = tweenVec[t];
 
-		if(!edgeDetect) {
-			if(zeroout)
-				tween = Scalar::all(0);
+			double sum = 0;
+			for(const auto& s : absSpectrum) {
+				sum += s;
+			}
+			Mat tweenRGB = cartoon(sourceRGB, sum);
+			cvtColor(tweenRGB, tween, CV_RGB2RGBA);
 		}
-		else {
-			if(zeroout)
-				tween = Scalar::all(0);
-			else
-				tween = sourceRGBA.clone();
-		}
-		for (int h = 0; h < sourceRGBA.rows; h++) {
-			for (int w = 0; w < sourceRGBA.cols; w++) {
-				if(edgeDetect && !edges.at<uint8_t>(h,w))
-					continue;
+	} else {
+		for (size_t t = 0; t < tweens; ++t) {
+			Mat& tween = tweenVec[t];
+			tween = Mat(sourceRGBA.rows, sourceRGBA.cols, sourceRGBA.type());
 
-				auto& vec = sourceRGBA.at<Vec4b>(h, w);
-				auto& vech = hsvImg.at<Vec3b>(h, w);
-				uint16_t hue = (((uint16_t) vech[0]) + rot) % 255;
-				assert(hue <= 255);
-				vech[0] = (((uint8_t) hue) / 32) * 32;
-				vech[2] = (vech[2] / 32) * 32;
+			if(!edgeDetect) {
+				if(zeroout)
+					tween = Scalar::all(0);
+			}
+			else {
+				if(zeroout)
+					tween = Scalar::all(0);
+				else
+					tween = sourceRGBA.clone();
+			}
+			for (int h = 0; h < sourceRGBA.rows; h++) {
+				for (int w = 0; w < sourceRGBA.cols; w++) {
+					if(edgeDetect && !edges.at<uint8_t>(h,w))
+						continue;
 
-				uint8_t mod = vech[component];
-				double hsvradian = ((double) mod / 255.0) * 2.0 * M_PI;
-				double vx = cos(hsvradian);
-				double vy = sin(hsvradian);
+					auto& vec = sourceRGBA.at<Vec4b>(h, w);
+					auto& vech = hsvImg.at<Vec3b>(h, w);
+					uint16_t hue = (((uint16_t) vech[0]) + rot) % 255;
+					assert(hue <= 255);
+					vech[0] = (((uint8_t) hue) / 32) * 32;
+					vech[2] = (vech[2] / 32) * 32;
 
-				double x = w
-						+ ((((vx * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
-				double y = h
-						+ ((((vy * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
+					uint8_t mod = vech[component];
+					double hsvradian = ((double) mod / 255.0) * 2.0 * M_PI;
+					double vx = cos(hsvradian);
+					double vy = sin(hsvradian);
 
-				if (x >= 0 && y >= 0 && x < tween.cols && y < tween.rows) {
-					auto& vect = tween.at<Vec4b>(y, x);
-					vect[0] = vec[0];
-					vect[1] = vec[1];
-					vect[2] = vec[2];
-					vect[3] = vec[3];
+					double x = w
+							+ ((((vx * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
+					double y = h
+							+ ((((vy * mod) * absSpectrum[mod % 8]) / (100 / boost)) / (t + 1));
+
+					if (x >= 0 && y >= 0 && x < tween.cols && y < tween.rows) {
+						auto& vect = tween.at<Vec4b>(y, x);
+						vect[0] = vec[0];
+						vect[1] = vec[1];
+						vect[2] = vec[2];
+						vect[3] = vec[3];
+					}
 				}
 			}
 		}
@@ -697,30 +764,36 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			cvtColor(morphed, blurVec[i], CV_RGB2RGBA);
 		}
 	} else {
-		for (size_t i = 0; i < tweens; ++i) {
-			if(edgeDetect) {
-				blurVec[i] = tweenVec[i].clone();
-			} else {
-					GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
+		if(!cartoonize) {
+			for (size_t i = 0; i < tweens; ++i) {
+				if(edgeDetect) {
+					blurVec[i] = tweenVec[i].clone();
+				} else {
+						GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
+				}
 			}
 		}
 	}
 
 
-	double factor = 1.0 / tweens;
-	for (size_t i = 0; i < tweens; ++i) {
-		for (int h = 0; h < sourceRGBA.rows; h++) {
-			for (int w = 0; w < sourceRGBA.cols; w++) {
-				auto& vecb = blurVec[i].at<Vec4b>(h, w);
-				auto& vecf = frame.at<Vec4b>(h, w);
+	if(tweens > 1) {
+		double factor = 1.0 / tweens;
+		for (size_t i = 0; i < tweens; ++i) {
+			for (int h = 0; h < sourceRGBA.rows; h++) {
+				for (int w = 0; w < sourceRGBA.cols; w++) {
+					auto& vecb = blurVec[i].at<Vec4b>(h, w);
+					auto& vecf = frame.at<Vec4b>(h, w);
 
-				if(vecb[3] > 0) {
-					vecf[0] = lerp(factor, vecb[0], vecf[0]);
-					vecf[1] = lerp(factor, vecb[1], vecf[1]);
-					vecf[2] = lerp(factor, vecb[2], vecf[2]);
+					if(vecb[3] > 0) {
+						vecf[0] = lerp(factor, vecb[0], vecf[0]);
+						vecf[1] = lerp(factor, vecb[1], vecf[1]);
+						vecf[2] = lerp(factor, vecb[2], vecf[2]);
+					}
 				}
 			}
 		}
+	} else {
+		frame = tweenVec[0].clone();
 	}
 //	imshow("", frame);
 //	waitKey(10);
@@ -731,7 +804,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		size_t fps, double boost, size_t tweens, size_t component,
-		bool randomizeDir, bool edgeDetect, bool zeroout, bool morph, size_t lowPass) {
+		bool randomizeDir, bool edgeDetect, bool zeroout, bool morph, size_t lowPass, bool cartoonize) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -784,13 +857,15 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 #pragma omp parallel for ordered schedule(dynamic)
 		for(size_t k = 0; k < video.size(); ++k) {
 				SpectrumType spectrum = signalFFT->fft(audioFrames[k].toArray());
-		    std::transform(
-		        std::begin(spectrum),
-		        std::end(spectrum),
-		        std::begin(filterSpectrum),
-		        std::begin(spectrum),
-		        [] (Aquila::ComplexType x, Aquila::ComplexType y) { return x * y; }
-		    );
+				if(lowPass > 0) {
+					std::transform(
+							std::begin(spectrum),
+							std::end(spectrum),
+							std::begin(filterSpectrum),
+							std::begin(spectrum),
+							[] (Aquila::ComplexType x, Aquila::ComplexType y) { return x * y; }
+					);
+				}
 				std::size_t halfLength = spectrum.size() / 2;
 				std::vector<double> absSpectrum(halfLength);
 				for (std::size_t k = 0; k < halfLength; ++k) {
@@ -798,7 +873,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 				}
 
 				Mat r = render(output, absSpectrum, video[k].clone(), i, boost, tweens, component,
-						randomizeDir, edgeDetect, zeroout, morph);
+						randomizeDir, edgeDetect, zeroout, morph, cartoonize);
 #pragma omp ordered
 				rendered.push_back(r.clone());
 				if(f == 10) {
@@ -832,6 +907,7 @@ int main(int argc, char** argv) {
 	bool edgeDetect = false;
 	bool zeroout = false;
 	bool morph = false;
+	bool cartoonize = false;
 	size_t lowPass = 0;
 	po::options_description genericDesc("Options");
 	genericDesc.add_options()
@@ -840,6 +916,7 @@ int main(int argc, char** argv) {
 			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
 			("lowpass,l", po::value<size_t>(&lowPass)->default_value(lowPass), "Apply a low pass filter at given frequency to the audio signal")
 			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
+			("cartoon,c",	"Use cartoon effect")
 			("morph,m",	"Use image morphing for tweening")
 			("hue,h",	"Use the hue of the picture to steer the effect")
 			("sat,s",	"Use the saturation of the picture to steer the effect")
@@ -906,6 +983,10 @@ int main(int argc, char** argv) {
 		morph = true;
 	}
 
+	if(vm.count("cartoon")) {
+		cartoonize = true;
+	}
+
 	SndfileHandle sndfile(audioFile);
 	VideoCapture capture(videoFile);
 	double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
@@ -917,7 +998,7 @@ int main(int argc, char** argv) {
 		throw "Error when reading " + videoFile;
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
-			randomizeDir, edgeDetect, zeroout, morph, lowPass);
+			randomizeDir, edgeDetect, zeroout, morph, lowPass, cartoonize);
 	capture.release();
 	output.release();
 	return 0;
