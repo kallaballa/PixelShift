@@ -764,7 +764,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			cvtColor(morphed, blurVec[i], CV_RGB2RGBA);
 		}
 	} else {
-		if(!cartoonize) {
+		if(tweens > 1) {
 			for (size_t i = 0; i < tweens; ++i) {
 				if(edgeDetect) {
 					blurVec[i] = tweenVec[i].clone();
@@ -772,6 +772,8 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 						GaussianBlur(tweenVec[i], blurVec[i], { 0, 0 }, 1, 1);
 				}
 			}
+		} else {
+			blurVec[0] = tweenVec[0].clone();
 		}
 	}
 
