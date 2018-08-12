@@ -62,7 +62,7 @@ void drawCircleGradient(Mat& gradient, const double& strength) {
 	gradient.convertTo(gradient, CV_32F);
 
 }
-void drawGradient(const Mat& lines) {
+void drawGradient(const Mat& lines, const double& strength) {
 	//Set linear gradient (255 gray levels)
 	for (int r = 0; r < lines.rows; r++)
 	{
@@ -70,15 +70,16 @@ void drawGradient(const Mat& lines) {
 	}
 
 	//Convert to polar (needs WARP_INVERSE_MAP flag)
-	cv::linearPolar(lines, lines, cv::Point(lines.cols / 2, lines.rows / 2), 255, INTER_CUBIC | WARP_FILL_OUTLIERS | WARP_INVERSE_MAP);
+	cv::linearPolar(lines, lines, cv::Point(lines.cols / 2, lines.rows / 2), 255 / (strength + 1), INTER_CUBIC | WARP_FILL_OUTLIERS | WARP_INVERSE_MAP);
 
 
 	//Mask out circle section
 	Mat mask(lines.size(), CV_8U, Scalar(0));
-	circle(mask, cv::Point(mask.cols / 2, mask.rows / 2), lines.rows/2, Scalar(255), -1);
+	circle(mask, cv::Point(mask.cols / 2, mask.rows / 2), lines.rows/2.0, Scalar(255), -1);
 	Mat circle_gradient;
 	lines.copyTo(circle_gradient, mask);
 }
+
 Mat remapToCircle(const Mat& src, const double& strength) {
 	 Mat dst;
 	 Mat map_x, map_y;
@@ -86,8 +87,8 @@ Mat remapToCircle(const Mat& src, const double& strength) {
 
 	 /// Create dst, map_x and map_y with the same size as src:
  dst.create( src.size(), src.type() );
- map_x.create( src.size(), CV_32FC2 );
- map_y.create( src.size(), CV_32FC2 );
+ map_x.create( src.size(), CV_32F );
+ map_y.create( src.size(), CV_32F );
 
 
  drawCircleGradient(map_y,strength / 3);
