@@ -32,7 +32,121 @@ using std::chrono::microseconds;
 namespace po = boost::program_options;
 
 typedef unsigned char sample_t;
+float euclidean_distance(cv::Point center, cv::Point point, int radius){
+    float distance = std::sqrt(
+        std::pow(center.x - point.x, 2) + std::pow(center.y - point.y, 2));
+    if (distance > radius) return 0;
+    return distance;
+}
 
+void drawCircleGradient(Mat& gradient, const double& strength) {
+	int h = gradient.rows;
+	int w = gradient.cols;
+  int radius = (std::min(gradient.cols, gradient.rows) / 2) * strength;
+
+  gradient = cv::Mat::zeros(h, w, CV_32F);
+
+	cv::Point center(w/ 2, h / 2);
+	cv::Point point;
+
+	for (int row = 0; row < h; ++row) {
+		for (int col = 0; col < w; ++col) {
+			point.x = col;
+			point.y = row;
+			gradient.at<float>(row, col) = euclidean_distance(center, point, radius);
+		}
+	}
+
+	cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
+	cv::bitwise_not(gradient, gradient);
+	gradient.convertTo(gradient, CV_32F);
+
+}
+void drawGradient(const Mat& lines) {
+	//Set linear gradient (255 gray levels)
+	for (int r = 0; r < lines.rows; r++)
+	{
+	    lines.row(r).setTo(r);
+	}
+
+	//Convert to polar (needs WARP_INVERSE_MAP flag)
+	cv::linearPolar(lines, lines, cv::Point(lines.cols / 2, lines.rows / 2), 255, INTER_CUBIC | WARP_FILL_OUTLIERS | WARP_INVERSE_MAP);
+
+
+	//Mask out circle section
+	Mat mask(lines.size(), CV_8U, Scalar(0));
+	circle(mask, cv::Point(mask.cols / 2, mask.rows / 2), lines.rows/2, Scalar(255), -1);
+	Mat circle_gradient;
+	lines.copyTo(circle_gradient, mask);
+}
+Mat remapToCircle(const Mat& src, const double& strength) {
+	 Mat dst;
+	 Mat map_x, map_y;
+	 int ind = 1;
+
+	 /// Create dst, map_x and map_y with the same size as src:
+ dst.create( src.size(), src.type() );
+ map_x.create( src.size(), CV_32FC2 );
+ map_y.create( src.size(), CV_32FC2 );
+
+
+ drawCircleGradient(map_y,strength / 3);
+ drawCircleGradient(map_x,strength / 3);
+
+
+// for( int j = 0; j < src.rows; j++ )
+//   { for( int i = 0; i < src.cols; i++ )
+//       {
+//         switch( ind )
+//         {
+//           case 0:
+//             if( i > src.cols*0.25 && i < src.cols*0.75 && j > src.rows*0.25 && j < src.rows*0.75 )
+//               {
+//                 map_x.at<float>(j,i) = 2*( i - src.cols*0.25 ) + 0.5 ;
+//                 map_y.at<float>(j,i) = 2*( j - src.rows*0.25 ) + 0.5 ;
+//                }
+//             else
+//               { map_x.at<float>(j,i) = 0 ;
+//                 map_y.at<float>(j,i) = 0 ;
+//               }
+//                 break;
+//           case 1:
+//                 map_x.at<float>(j,i) = i ;
+//                 map_y.at<float>(j,i) = src.rows - j ;
+//                 break;
+//           case 2:
+//                 map_x.at<float>(j,i) = src.cols - i ;
+//                 map_y.at<float>(j,i) = j ;
+//                 break;
+//           case 3:
+//                 map_x.at<float>(j,i) = src.cols - i ;
+//                 map_y.at<float>(j,i) = src.rows - j ;
+//                 break;
+//         } // end of switch
+//       }
+//    }
+   remap( src, dst, map_x, map_y, CV_INTER_LINEAR, BORDER_CONSTANT, Scalar(0,0, 0) );
+  	for (int h = 0; h < dst.rows; ++h) {
+			for (int w = 0; w < dst.cols; ++w) {
+				if(map_x.at<float>(h,w) == 255) {
+					dst.at<Vec3b>(h, w)[0] = 0;
+					dst.at<Vec3b>(h, w)[1] = 0;
+					dst.at<Vec3b>(h, w)[2] = 0;
+				}
+			}
+		}
+
+
+//   double min, max;
+//   cv::minMaxLoc(map_x, &min, &max);
+//  map_x.convertTo(map_x,CV_8U,255.0/(max - min),-255.0*min/(max-min));
+//
+//   imshow("",map_x);
+// 	 waitKey(0);
+
+
+   return dst;
+}
 Mat cartoon(const Mat& img, const double& strength)
 {
     /** EDGES **/
@@ -633,10 +747,9 @@ void cannyThreshold(const Mat& src, Mat& 	detected_edges) {
   Canny( detected_edges, detected_edges, 0, 255, 3 );
  }
 
-
 Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 		const Mat& sourceRGB, const size_t& iteration, const double& boost,
-		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const double& morph, const bool& cartoonize) {
+		size_t tweens, const size_t& component, const bool& randomizeDir, const bool& edgeDetect, const bool& zeroout, const double& morph, const bool& cartoonize, const bool& remapCircle) {
 	std::vector<Mat> tweenVec(tweens);
 	Mat hsvImg;
 	Mat sourceRGBA;
@@ -655,7 +768,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 	if (randomizeDir)
 		rot = rand() % 255;
 
-	if(cartoonize) {
+	if(remapCircle) {
 		for (size_t t = 0; t < tweens; ++t) {
 			Mat& tween = tweenVec[t];
 
@@ -663,7 +776,18 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 			for(const auto& s : absSpectrum) {
 				sum += s;
 			}
-			Mat tweenRGB = cartoon(sourceRGB, sum);
+			Mat tweenRGB = remapToCircle(sourceRGB, sum  / ((t + 1) * 10));
+			cvtColor(tweenRGB, tween, CV_RGB2RGBA);
+		}
+	} else if(cartoonize) {
+		for (size_t t = 0; t < tweens; ++t) {
+			Mat& tween = tweenVec[t];
+
+			double sum = 0;
+			for(const auto& s : absSpectrum) {
+				sum += s;
+			}
+			Mat tweenRGB = cartoon(sourceRGB, sum  / ((t + 1) * 10));
 			cvtColor(tweenRGB, tween, CV_RGB2RGBA);
 		}
 	} else {
@@ -717,7 +841,11 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 	if(morph > 0)
 		tweens = morphTweens;
 
-	Mat frame = sourceRGBA.clone();
+	Mat frame;
+	if(cartoonize)
+		frame = tweenVec[0].clone();
+	else
+		frame = sourceRGBA.clone();
 	std::vector<Mat> blurVec(tweens);
 
 	if(morph > 0) {
@@ -810,7 +938,7 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 
 void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 		size_t fps, double boost, size_t tweens, size_t component,
-		bool randomizeDir, bool edgeDetect, bool zeroout, double morph, size_t lowPass, bool cartoonize) {
+		bool randomizeDir, bool edgeDetect, bool zeroout, double morph, size_t lowPass, bool cartoonize, bool remapCircle) {
 	Mat frame;
 	double samplingRate = file.samplerate();
 	size_t channels = file.channels();
@@ -879,7 +1007,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 				}
 
 				Mat r = render(output, absSpectrum, video[k].clone(), i, boost, tweens, component,
-						randomizeDir, edgeDetect, zeroout, morph, cartoonize);
+						randomizeDir, edgeDetect, zeroout, morph, cartoonize, remapCircle);
 #pragma omp ordered
 				rendered.push_back(r.clone());
 				if(f == 10) {
@@ -914,6 +1042,7 @@ int main(int argc, char** argv) {
 	bool zeroout = false;
 	double morph = 0;
 	bool cartoonize = false;
+	bool remapCircle = false;
 	size_t lowPass = 0;
 	po::options_description genericDesc("Options");
 	genericDesc.add_options()
@@ -922,7 +1051,8 @@ int main(int argc, char** argv) {
 			("tweens,t", po::value<size_t>(&tweens)->default_value(tweens), "How many in between steps should the effect produce")
 			("lowpass,l", po::value<size_t>(&lowPass)->default_value(lowPass), "Apply a low pass filter at given frequency to the audio signal")
 			("output,o", po::value<string>(&outputVideo)->default_value(outputVideo),	"The filename of the resulting video")
-			("morph,m",	po::value<double>(&morph)->default_value(morph),"The maximum feature distance for image morphing. 1.0 means the max distance equals the diagonal of the video")
+			("morph,m",	po::value<double>(&morph)->default_value(morph),"The maximum feature distance for image morphing (used for tweening). 1.0 means the max distance equals the diagonal of the video")
+			("remap,p",	"Use remap to circle effect")
 			("cartoon,c",	"Use cartoon effect")
 			("hue,h",	"Use the hue of the picture to steer the effect")
 			("sat,s",	"Use the saturation of the picture to steer the effect")
@@ -989,6 +1119,10 @@ int main(int argc, char** argv) {
 		cartoonize = true;
 	}
 
+	if(vm.count("remap")) {
+		remapCircle = true;
+	}
+
 	SndfileHandle sndfile(audioFile);
 	VideoCapture capture(videoFile);
 	double width = capture.get(CV_CAP_PROP_FRAME_WIDTH);
@@ -1000,7 +1134,7 @@ int main(int argc, char** argv) {
 		throw "Error when reading " + videoFile;
 
 	pixelShift(capture, sndfile, output, fps, boost, tweens, component,
-			randomizeDir, edgeDetect, zeroout, morph, lowPass, cartoonize);
+			randomizeDir, edgeDetect, zeroout, morph, lowPass, cartoonize, remapCircle);
 	capture.release();
 	output.release();
 	return 0;
