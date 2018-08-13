@@ -31,15 +31,132 @@ using std::chrono::microseconds;
 
 namespace po = boost::program_options;
 
+float calc_shift(float x1,float x2,float cx,float k)
+{
+    float thresh = 1;
+    float x3 = x1+(x2-x1)*0.5;
+    float res1 = x1+((x1-cx)*k*((x1-cx)*(x1-cx)));
+    float res3 = x3+((x3-cx)*k*((x3-cx)*(x3-cx)));
+
+//    std::cerr<<"x1: "<<x1<<" - "<<res1<<" x3: "<<x3<<" - "<<res3<<std::endl;
+
+    if(res1>-thresh and res1 < thresh)
+        return x1;
+    if(res3<0){
+        return calc_shift(x3,x2,cx,k);
+    }else{
+        return calc_shift(x1,x3,cx,k);
+  }
+}
+
+float getRadialX(float x,float y,float cx,float cy,float k, bool scale, Vec4f props)
+{
+    float result;
+    if(scale)
+    {
+        float xshift = props[0];
+        float yshift = props[1];
+        float xscale = props[2];
+        float yscale = props[3];
+
+        x = (x*xscale+xshift);
+        y = (y*yscale+yshift);
+        result = x+((x-cx)*k*((x-cx)*(x-cx)+(y-cy)*(y-cy)));
+    }else{
+//        result = (cx+(x-cx)*(1+k*((x-cx)*(x-cx)+(y-cy)*(y-cy))));
+//        or
+        result = x+((x-cx)*k*((x-cx)*(x-cx)+(y-cy)*(y-cy)));
+    }
+    return result;
+}
+
+float getRadialY(float x,float y,float cx,float cy,float k, bool scale, Vec4f props)
+{
+    float result;
+    if(scale)
+    {
+        float xshift = props[0];
+        float yshift = props[1];
+        float xscale = props[2];
+        float yscale = props[3];
+
+        x = (x*xscale+xshift);
+        y = (y*yscale+yshift);
+        result = y+((y-cy)*k*((x-cx)*(x-cx)+(y-cy)*(y-cy)));
+    }else{
+//        result = (cy+(y-cy)*(1+k*((x-cx)*(x-cx)+(y-cy)*(y-cy))));
+//        or
+        result = y+((y-cy)*k*((x-cx)*(x-cx)+(y-cy)*(y-cy)));
+    }
+    return result;
+}
+
+// Cx and Cy specify the coordinates from where the distorted image will have as initial point and
+// k specifies the distortion factor
+void fishEye(InputArray _src, OutputArray _dst, double Cx, double Cy, double k, bool scale = true)
+{
+    // die if distortion parameters are not correct
+    CV_Assert(Cx >= 0 && Cy >= 0 && k >= 0);
+
+    Mat src = _src.getMat();
+    // die if sample image is not the correct type
+    //CV_Assert(src.type() == CV_8UC1 || src.type() == CV_8UC3);
+
+    Mat mapx = Mat(src.size(), CV_32FC1);
+    Mat mapy = Mat(src.size(), CV_32FC1);
+
+    int w = src.cols;
+    int h = src.rows;
+
+    Vec4f props;
+    float xShift = calc_shift(0, Cx - 1, Cx, k);
+    props[0] = xShift;
+    float newCenterX = w - Cx;
+    float xShift2 = calc_shift(0, newCenterX - 1, newCenterX, k);
+
+    float yShift = calc_shift(0, Cy - 1, Cy, k);
+    props[1] = yShift;
+    float newCenterY = w - Cy;
+    float yShift2 = calc_shift(0, newCenterY - 1, newCenterY, k);
+
+    float xScale = (w - xShift - xShift2) / w;
+    props[2] = xScale;
+    float yScale = (h - yShift - yShift2) / h;
+    props[3] = yScale;
+
+    float* p = mapx.ptr<float>(0);
+
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
+        {
+            *p++ = getRadialX((float)x, (float)y, Cx, Cy, k, scale, props);
+        }
+    }
+
+    p = mapy.ptr<float>(0);
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
+        {
+            *p++ = getRadialY((float)x, (float)y, Cx, Cy, k, scale, props);
+        }
+    }
+
+    remap(src, _dst, mapx, mapy, CV_INTER_LINEAR, BORDER_CONSTANT);
+
+//    Mat(src).copyTo(_dst);
+}
+
 typedef unsigned char sample_t;
 float euclidean_distance(cv::Point center, cv::Point point, int radius){
     float distance = std::sqrt(
         std::pow(center.x - point.x, 2) + std::pow(center.y - point.y, 2));
-    if (distance > radius) return 0;
+    if (distance > radius) return radius;
     return distance;
 }
 
-void drawCircleGradient(Mat& gradient, const double& strength) {
+void drawCircleGradientX(Mat& gradient, const double& strength) {
 	int h = gradient.rows;
 	int w = gradient.cols;
   int radius = (std::min(gradient.cols, gradient.rows) / 2) * strength;
@@ -53,14 +170,46 @@ void drawCircleGradient(Mat& gradient, const double& strength) {
 		for (int col = 0; col < w; ++col) {
 			point.x = col;
 			point.y = row;
-			gradient.at<float>(row, col) = euclidean_distance(center, point, radius);
+
+
+			gradient.at<float>(row, col) = (col + euclidean_distance(center, point, radius)) / 2;
 		}
 	}
 
-	cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
-	cv::bitwise_not(gradient, gradient);
-	gradient.convertTo(gradient, CV_32F);
 
+	cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
+//	imshow("", gradient);
+//	waitKey(0);
+//	cv::bitwise_not(gradient, gradient);
+	gradient.convertTo(gradient, CV_32F);
+	cv::normalize(gradient, gradient, 0, w, cv::NORM_MINMAX, CV_32F);
+}
+
+void drawCircleGradientY(Mat& gradient, const double& strength) {
+	int h = gradient.rows;
+	int w = gradient.cols;
+  int radius = (std::min(gradient.cols, gradient.rows) / 2);
+
+  gradient = cv::Mat::zeros(h, w, CV_32F);
+
+	cv::Point center(w/ 2, h / 2);
+	cv::Point point;
+
+	for (int row = 0; row < h; ++row) {
+		for (int col = 0; col < w; ++col) {
+			point.x = col;
+			point.y = row;
+			gradient.at<float>(row, col) = row;
+		}
+	}
+
+
+	cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
+//	imshow("", gradient);
+//	waitKey(0);
+//	cv::bitwise_not(gradient, gradient);
+	gradient.convertTo(gradient, CV_32F);
+	cv::normalize(gradient, gradient, 0, h, cv::NORM_MINMAX, CV_32F);
 }
 void drawGradient(const Mat& lines, const double& strength) {
 	//Set linear gradient (255 gray levels)
@@ -89,45 +238,12 @@ Mat remapToCircle(const Mat& src, const double& strength) {
  dst.create( src.size(), src.type() );
  map_x.create( src.size(), CV_32F );
  map_y.create( src.size(), CV_32F );
+// map_y = Mat::zeros(src.size(), CV_32F);
+ drawCircleGradientX(map_x,strength / 3);
+ drawCircleGradientY(map_y,strength / 3);
 
-
- drawCircleGradient(map_y,strength / 3);
- drawCircleGradient(map_x,strength / 3);
-
-
-// for( int j = 0; j < src.rows; j++ )
-//   { for( int i = 0; i < src.cols; i++ )
-//       {
-//         switch( ind )
-//         {
-//           case 0:
-//             if( i > src.cols*0.25 && i < src.cols*0.75 && j > src.rows*0.25 && j < src.rows*0.75 )
-//               {
-//                 map_x.at<float>(j,i) = 2*( i - src.cols*0.25 ) + 0.5 ;
-//                 map_y.at<float>(j,i) = 2*( j - src.rows*0.25 ) + 0.5 ;
-//                }
-//             else
-//               { map_x.at<float>(j,i) = 0 ;
-//                 map_y.at<float>(j,i) = 0 ;
-//               }
-//                 break;
-//           case 1:
-//                 map_x.at<float>(j,i) = i ;
-//                 map_y.at<float>(j,i) = src.rows - j ;
-//                 break;
-//           case 2:
-//                 map_x.at<float>(j,i) = src.cols - i ;
-//                 map_y.at<float>(j,i) = j ;
-//                 break;
-//           case 3:
-//                 map_x.at<float>(j,i) = src.cols - i ;
-//                 map_y.at<float>(j,i) = src.rows - j ;
-//                 break;
-//         } // end of switch
-//       }
-//    }
-   remap( src, dst, map_x, map_y, CV_INTER_LINEAR, BORDER_CONSTANT, Scalar(0,0, 0) );
-  	for (int h = 0; h < dst.rows; ++h) {
+   remap( src, dst, map_x, map_y, INTER_CUBIC, BORDER_CONSTANT, Scalar(0,0, 0) );
+  	/*for (int h = 0; h < dst.rows; ++h) {
 			for (int w = 0; w < dst.cols; ++w) {
 				if(map_x.at<float>(h,w) == 255) {
 					dst.at<Vec3b>(h, w)[0] = 0;
@@ -135,16 +251,7 @@ Mat remapToCircle(const Mat& src, const double& strength) {
 					dst.at<Vec3b>(h, w)[2] = 0;
 				}
 			}
-		}
-
-
-//   double min, max;
-//   cv::minMaxLoc(map_x, &min, &max);
-//  map_x.convertTo(map_x,CV_8U,255.0/(max - min),-255.0*min/(max-min));
-//
-//   imshow("",map_x);
-// 	 waitKey(0);
-
+		}*/
 
    return dst;
 }
@@ -989,7 +1096,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 
 
 		rendered.clear();
-#pragma omp parallel for ordered schedule(dynamic)
+//#pragma omp parallel for ordered schedule(dynamic)
 		for(size_t k = 0; k < video.size(); ++k) {
 				SpectrumType spectrum = signalFFT->fft(audioFrames[k].toArray());
 				if(lowPass > 0) {
@@ -1009,7 +1116,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 
 				Mat r = render(output, absSpectrum, video[k].clone(), i, boost, tweens, component,
 						randomizeDir, edgeDetect, zeroout, morph, cartoonize, remapCircle);
-#pragma omp ordered
+//#pragma omp ordered
 				rendered.push_back(r.clone());
 				if(f == 10) {
 					auto duration = std::chrono::duration_cast<microseconds>(
