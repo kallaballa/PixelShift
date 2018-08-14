@@ -8,6 +8,7 @@
 #include <chrono>
 #include <list>
 #include <algorithm>
+#include <mutex>
 
 #include <boost/program_options.hpp>
 #include <sndfile.hh>
@@ -17,6 +18,8 @@
 #include <opencv2/imgproc/imgproc.hpp>
 #include <opencv2/features2d.hpp>
 #include <opencv2/calib3d.hpp>
+#include "opencv2/face.hpp"
+
 
 #define cimg_use_jpeg
 #include "aquila/global.h"
@@ -25,11 +28,124 @@
 #include "aquila/source/FramesCollection.h"
 #include "aquila/tools/TextPlot.h"
 
+
+
 using namespace cv;
 using std::vector;
+
 using std::chrono::microseconds;
 
 namespace po = boost::program_options;
+
+CascadeClassifier* face_cascade;
+CascadeClassifier * eye_cascade;
+
+std::mutex fdMutex;
+
+void faceDetect(const Mat& img, vector<Rect>& faces, vector<Rect>& eyes) {
+	Mat gray;
+	cvtColor(img, gray, CV_RGB2GRAY);
+	fdMutex.lock();
+	face_cascade->detectMultiScale(gray, faces, 1.3, 5);
+
+	for (auto& bb : faces) {
+		eye_cascade->detectMultiScale(gray(bb), eyes);
+		for(auto &bbe : eyes) {
+			bbe.x += bb.x;
+			bbe.y += bb.y;
+		}
+	}
+	fdMutex.unlock();
+}
+
+void pinch(const Mat& Img, Mat& Img_out)
+{
+    Img.copyTo(Img_out);
+
+    int width=Img.cols;
+    int height=Img.rows;
+    float angle = M_PI_2;
+    float centreX = 0.5;
+    float centreY = 0.5;
+    float radius = 0;
+    float amount=0.5;
+
+    if (radius==0) radius=std::min(width, height)/2;
+
+    float icentreX=width*centreX;
+    float icentreY=height*centreY;
+    float radius2=radius*radius;
+
+    float dx,dy,new_x,new_y;
+    float p,q,x1,y1;
+    float distance;
+    float a,d,t,s,c,e;
+
+    for (int y=0; y<height; y++)
+    {
+        for (int x=0; x<width; x++)
+        {
+
+             dx=x-icentreX;
+             dy=y-icentreY;
+
+             distance=dx*dx+dy*dy;
+
+             if (distance>radius2 || distance==0)
+             {
+                 new_x=x;
+                 new_y=y;
+             }
+             else
+             {
+                d = sqrt( distance / radius2 );
+                t = pow(sin( M_PI*0.5 * d ),-amount);
+
+                dx =dx* t;
+                dy =dy* t;
+
+                e = 1 - d;
+                a = angle * e * e;
+
+                s = sin( a );
+                c = cos( a );
+
+                new_x = icentreX + c*dx - s*dy;
+                new_y = icentreY + s*dx + c*dy;
+             }
+
+            if(new_x<0)         new_x=0;
+            if(new_x>=width-1)  new_x=width-2;
+            if(new_y<0)         new_y=0;
+            if(new_y>=height-1) new_y=height-2;
+
+            x1=(int)new_x;
+            y1=(int)new_y;
+
+            p=new_x-x1;
+            q=new_y-y1;
+
+            for (int k=0; k<3; k++)
+            {
+                Img_out.at<Vec3b>(y, x)[k]=(1-p)*(1-q)*Img.at<Vec3b>(y1, x1)[k]+
+                                        (p)*(1-q)*Img.at<Vec3b>(y1,x1+1)[k]+
+                                        (1-p)*(q)*Img.at<Vec3b>(y1+1,x1)[k]+
+                                        (p)*(q)*Img.at<Vec3b>(y1+1,x1+1)[k];
+            }
+
+        }
+    }
+}
+
+void undistort(Mat& mapx, Mat& mapy, int x, int y, Mat K, std::vector<float>& d) {
+	Mat newcameramatrix;
+  initUndistortRectifyMap(K, d, Mat(), newcameramatrix, {x, y}, CV_32FC1, mapx, mapy);
+}
+
+
+double distance(const Point2f& p1, const Point2f& p2){
+return sqrt(pow(p1.x - p2.x, 2) + pow(p1.y - p2.y, 2));
+}
 
 float calc_shift(float x1,float x2,float cx,float k)
 {
@@ -156,10 +272,15 @@ float euclidean_distance(cv::Point center, cv::Point point, int radius){
     return distance;
 }
 
+float borderDistance(int w, int col) {
+	return std::min(col, w - col);
+}
+
 void drawCircleGradientX(Mat& gradient, const double& strength) {
 	int h = gradient.rows;
 	int w = gradient.cols;
-  int radius = (std::min(gradient.cols, gradient.rows) / 2) * strength;
+  int radius = (std::min(gradient.cols, gradient.rows) / 2) / (strength + 1);
+
 
   gradient = cv::Mat::zeros(h, w, CV_32F);
 
@@ -171,16 +292,15 @@ void drawCircleGradientX(Mat& gradient, const double& strength) {
 			point.x = col;
 			point.y = row;
 
+			gradient.at<float>(row, col) = pow(sin(((double)col/w) * M_PI) * sin(((double)row/h) * M_PI), strength * 200);
 
-			gradient.at<float>(row, col) = (col + euclidean_distance(center, point, radius)) / 2;
+//gradient.at<float>(row, col) = pow(col,strength + 1);
 		}
 	}
 
 
-	cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
-//	imshow("", gradient);
-//	waitKey(0);
-//	cv::bitwise_not(gradient, gradient);
+	//cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
+	//cv::bitwise_not(gradient, gradient);
 	gradient.convertTo(gradient, CV_32F);
 	cv::normalize(gradient, gradient, 0, w, cv::NORM_MINMAX, CV_32F);
 }
@@ -188,9 +308,9 @@ void drawCircleGradientX(Mat& gradient, const double& strength) {
 void drawCircleGradientY(Mat& gradient, const double& strength) {
 	int h = gradient.rows;
 	int w = gradient.cols;
-  int radius = (std::min(gradient.cols, gradient.rows) / 2);
+  int radius = (std::min(gradient.cols, gradient.rows) / 2) / (strength + 1);
 
-  gradient = cv::Mat::zeros(h, w, CV_32F);
+ // gradient = cv::Mat::zeros(h, w, CV_32F);
 
 	cv::Point center(w/ 2, h / 2);
 	cv::Point point;
@@ -199,12 +319,13 @@ void drawCircleGradientY(Mat& gradient, const double& strength) {
 		for (int col = 0; col < w; ++col) {
 			point.x = col;
 			point.y = row;
-			gradient.at<float>(row, col) = row;
+
+			gradient.at<float>(row, col) = pow(sin(((double)col/w) * M_PI) * sin(((double)row/h) * M_PI), strength * 200);
 		}
 	}
 
 
-	cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
+	//cv::normalize(gradient, gradient, 0, 255, cv::NORM_MINMAX, CV_8U);
 //	imshow("", gradient);
 //	waitKey(0);
 //	cv::bitwise_not(gradient, gradient);
@@ -232,17 +353,35 @@ void drawGradient(const Mat& lines, const double& strength) {
 Mat remapToCircle(const Mat& src, const double& strength) {
 	 Mat dst;
 	 Mat map_x, map_y;
-	 int ind = 1;
 
 	 /// Create dst, map_x and map_y with the same size as src:
  dst.create( src.size(), src.type() );
  map_x.create( src.size(), CV_32F );
  map_y.create( src.size(), CV_32F );
-// map_y = Mat::zeros(src.size(), CV_32F);
- drawCircleGradientX(map_x,strength / 3);
- drawCircleGradientY(map_y,strength / 3);
+ map_x = Mat::zeros(src.size(), CV_32F);
+ map_y = Mat::zeros(src.size(), CV_32F);
+ int x = src.cols;
+ int y = src.rows;
+// focal lengths
+ float f_x = 300;
+float f_y = 300;
+// center coordinates
+	float c_x = src.cols/2.0;
+		float c_y = src.rows/2.0;
+// distortion coefficients
+	std::vector<float> d = {1.0,0,0,0,0};
 
-   remap( src, dst, map_x, map_y, INTER_CUBIC, BORDER_CONSTANT, Scalar(0,0, 0) );
+// Construct camera matrix
+	Mat K = (Mat_<float>(3, 3) << f_x, 0.0, c_x, 0.0, f_y, c_y, 0.0, 0.0, 1.0);
+	undistort(map_x, map_y, x, y, K, d);
+	cv::normalize(map_x, map_x, 0, src.cols, cv::NORM_MINMAX, CV_32FC1);
+	cv::normalize(map_y, map_y, 0, src.rows, cv::NORM_MINMAX, CV_32FC1);
+
+
+// drawCircleGradientX(map_x,strength / 3);
+// drawCircleGradientY(map_y,strength / 3);
+
+   remap( src, dst, map_x, map_y, INTER_CUBIC, BORDER_REPLICATE, Scalar(0,0, 0) );
   	/*for (int h = 0; h < dst.rows; ++h) {
 			for (int w = 0; w < dst.cols; ++w) {
 				if(map_x.at<float>(h,w) == 255) {
@@ -252,8 +391,39 @@ Mat remapToCircle(const Mat& src, const double& strength) {
 				}
 			}
 		}*/
-
+ 	imshow("", dst);
+ 	waitKey(0);
    return dst;
+}
+
+Mat remapToLens(const Mat& src, const double& strength) {
+	Mat dst;
+	Mat map_x, map_y;
+
+	/// Create dst, map_x and map_y with the same size as src:
+	dst.create(src.size(), src.type());
+	map_x = Mat::zeros(src.size(), CV_32F);
+	map_y = Mat::zeros(src.size(), CV_32F);
+	int x = src.cols;
+	int y = src.rows;
+// focal lengths
+	float f_x = 300;
+	float f_y = 300;
+// center coordinates
+	float c_x = src.cols / 2.0;
+	float c_y = src.rows / 2.0;
+// distortion coefficients
+	std::vector<float> d = { strength * 10, 0, 0, 0, 0 };
+
+// Construct camera matrix
+	Mat K = (Mat_<float>(3, 3) << f_x, 0.0, c_x, 0.0, f_y, c_y, 0.0, 0.0, 1.0);
+	undistort(map_x, map_y, x, y, K, d);
+	cv::normalize(map_x, map_x, 0, src.cols, cv::NORM_MINMAX, CV_32FC1);
+	cv::normalize(map_y, map_y, 0, src.rows, cv::NORM_MINMAX, CV_32FC1);
+
+	remap(src, dst, map_x, map_y, INTER_CUBIC, BORDER_REPLICATE, Scalar(0, 0, 0));
+
+	return dst;
 }
 Mat cartoon(const Mat& img, const double& strength)
 {
@@ -312,10 +482,6 @@ Mat cartoon(const Mat& img, const double& strength)
 
 bool operator==(const KeyPoint& kp1, const KeyPoint& kp2) {
 	return kp1.pt.x == kp2.pt.x && kp1.pt.y == kp2.pt.y;
-}
-
-double distance(Point2f& p1, Point2f& p2){
-return sqrt(pow(p1.x - p2.x, 2) + pow(p1.y - p2.y, 2));
 }
 
 int ratioTest(std::vector<std::vector<cv::DMatch> >
@@ -876,15 +1042,47 @@ Mat render(VideoWriter& output, const std::vector<double>& absSpectrum,
 	if (randomizeDir)
 		rot = rand() % 255;
 
-	if(remapCircle) {
+	if(true) {
 		for (size_t t = 0; t < tweens; ++t) {
 			Mat& tween = tweenVec[t];
-
+			tween = sourceRGBA.clone();
 			double sum = 0;
 			for(const auto& s : absSpectrum) {
 				sum += s;
 			}
-			Mat tweenRGB = remapToCircle(sourceRGB, sum  / ((t + 1) * 10));
+
+			vector<Rect> faces;
+			vector<Rect> eyes;
+			faceDetect(sourceRGB, faces, eyes);
+			if(eyes.empty()) {
+				tween = sourceRGBA.clone();
+				continue;
+			}
+
+			Mat tweenRGB;
+			cvtColor(tween, tweenRGB, CV_RGBA2RGB);
+			for(const auto& bb : eyes) {
+//							bb.x -= bb.width * 2;
+//							bb.y -= bb.height * 2;
+//							bb.width += bb.width * 3;
+//							bb.height += bb.height * 3;
+							Mat distorted = remapToLens(tweenRGB(bb) , sum/absSpectrum.size());
+							distorted.copyTo(tweenRGB(bb));
+			}
+//			imshow("", tweenRGB);
+//			waitKey(0);
+			cvtColor(tweenRGB, tween, CV_RGB2RGBA);
+		}
+	} else if(remapCircle) {
+		for (size_t t = 0; t < tweens; ++t) {
+			Mat& tween = tweenVec[t];
+			tween = sourceRGBA.clone();
+			double sum = 0;
+			for(const auto& s : absSpectrum) {
+				sum += s;
+			}
+
+			Mat tweenRGB = remapToLens(sourceRGB, sum/absSpectrum.size());
 			cvtColor(tweenRGB, tween, CV_RGB2RGBA);
 		}
 	} else if(cartoonize) {
@@ -1096,7 +1294,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 
 
 		rendered.clear();
-//#pragma omp parallel for ordered schedule(dynamic)
+#pragma omp parallel for ordered schedule(dynamic)
 		for(size_t k = 0; k < video.size(); ++k) {
 				SpectrumType spectrum = signalFFT->fft(audioFrames[k].toArray());
 				if(lowPass > 0) {
@@ -1116,7 +1314,7 @@ void pixelShift(VideoCapture& capture, SndfileHandle& file, VideoWriter& output,
 
 				Mat r = render(output, absSpectrum, video[k].clone(), i, boost, tweens, component,
 						randomizeDir, edgeDetect, zeroout, morph, cartoonize, remapCircle);
-//#pragma omp ordered
+#pragma omp ordered
 				rendered.push_back(r.clone());
 				if(f == 10) {
 					auto duration = std::chrono::duration_cast<microseconds>(
@@ -1238,6 +1436,9 @@ int main(int argc, char** argv) {
 	VideoWriter output(outputVideo, CV_FOURCC('H', '2', '6', '4'), fps,
 			Size(width, height));
 
+
+	face_cascade = new CascadeClassifier("haarcascade_frontalface_default.xml");
+	eye_cascade = new CascadeClassifier("haarcascade_eye.xml");
 	if (!capture.isOpened())
 		throw "Error when reading " + videoFile;
 
